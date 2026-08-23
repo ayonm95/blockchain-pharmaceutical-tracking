@@ -1,0 +1,264 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 24px 80px;
+  color: #e5eef7;
+}
+
+.shell {
+  display: grid;
+  gap: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 24px;
+  border-radius: 18px;
+  background: rgba(11, 27, 44, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.nav a {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  color: #dfeaf6;
+  text-decoration: none;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.navActive {
+  background: rgba(20, 184, 166, 0.15);
+  border-color: rgba(20, 184, 166, 0.5) !important;
+}
+
+.eyebrow {
+  color: #66d9c5;
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.hero h1 {
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  line-height: 1.08;
+  max-width: 760px;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 4px;
+}
+
+.card,
+.panel,
+.alertBox,
+.inventoryCard {
+  background: rgba(11, 27, 44, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.15);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card span {
+  color: #8db6d6;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.card strong {
+  line-height: 1.5;
+  font-size: 1rem;
+  word-break: break-word;
+}
+
+.alertBox {
+  background: rgba(20, 184, 166, 0.12);
+  border-color: rgba(20, 184, 166, 0.4);
+  color: #ebfdf8;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+.panel {
+  margin-bottom: 24px;
+}
+
+.panel h2 {
+  margin-bottom: 18px;
+  font-size: 1.2rem;
+}
+
+.listTable {
+  display: grid;
+  gap: 12px;
+}
+
+.listRow {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.listRow > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.listRow strong {
+  font-size: 0.98rem;
+}
+
+.listRow span {
+  color: #bfd0df;
+  font-size: 0.82rem;
+  word-break: break-word;
+}
+
+.inventoryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.inventoryCard {
+  display: grid;
+  gap: 8px;
+}
+
+.inventoryHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: #7dd3fc;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.inventoryCard p {
+  line-height: 1.5;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.primaryButton,
+.secondaryButton {
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.primaryButton {
+  background: linear-gradient(135deg, #14b8a6, #3b82f6);
+  color: white;
+}
+
+.secondaryButton {
+  background: #12263d;
+  color: #ebf3ff;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.primaryButton:hover,
+.secondaryButton:hover {
+  transform: translateY(-1px);
+}
+
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.buttonRow button {
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #14b8a6, #3b82f6);
+  color: white;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fieldGroup {
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+}
+
+.fieldGroup label {
+  color: #8db6d6;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.fieldGroup input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.8);
+  color: #ebf3ff;
+  padding: 10px 12px;
+}
+
+.empty {
+  color: #a7b7c8;
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .listRow {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 500px) {
+  .page {
+    padding: 16px 12px 48px;
+  }
+
+  .listRow {
+    grid-template-columns: 1fr;
+  }
+}
