@@ -55,3 +55,9 @@ After setting the variable, you can run the deployment with the Sepolia network:
 ```shell
 npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
 ```
+npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+npx hardhat run scripts/grant-roles.ts --network sepolia
+npx hardhat run scripts/create-medicine.ts --network sepolia
+
+
+

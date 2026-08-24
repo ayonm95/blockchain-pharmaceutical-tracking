@@ -31,16 +31,30 @@ async function main() {
   const rpcUrl = requireEnv("SEPOLIA_RPC_URL");
   const contractAddress = requireAddress("SEPOLIA_CONTRACT_ADDRESS");
   const manufacturerPrivateKey = requirePrivateKey("SEPOLIA_PRIVATE_KEY_MANUFACTURER");
-  const manufacturerAddress = requireAddress("SEPOLIA_MANUFACTURER_ADDRESS");
-  const distributorAddress = requireAddress("SEPOLIA_DISTRIBUTOR_ADDRESS");
+  const distributorPrivateKey = requirePrivateKey("SEPOLIA_PRIVATE_KEY_DISTRIBUTOR");
 
   const provider = new ethers.JsonRpcProvider(rpcUrl);
   const manufacturerWallet = new ethers.Wallet(manufacturerPrivateKey, provider);
+  const distributorWallet = new ethers.Wallet(distributorPrivateKey, provider);
   const adminWallet = manufacturerWallet;
+
+  const manufacturerAddress = process.env.SEPOLIA_MANUFACTURER_ADDRESS
+    ? requireAddress("SEPOLIA_MANUFACTURER_ADDRESS")
+    : manufacturerWallet.address;
 
   if (manufacturerWallet.address.toLowerCase() !== manufacturerAddress.toLowerCase()) {
     throw new Error(
       `SEPOLIA_MANUFACTURER_ADDRESS must match SEPOLIA_PRIVATE_KEY_MANUFACTURER wallet. Expected ${manufacturerWallet.address}, received ${manufacturerAddress}`
+    );
+  }
+
+  const distributorAddress = process.env.SEPOLIA_DISTRIBUTOR_ADDRESS
+    ? requireAddress("SEPOLIA_DISTRIBUTOR_ADDRESS")
+    : distributorWallet.address;
+
+  if (distributorWallet.address.toLowerCase() !== distributorAddress.toLowerCase()) {
+    throw new Error(
+      `SEPOLIA_DISTRIBUTOR_ADDRESS must match SEPOLIA_PRIVATE_KEY_DISTRIBUTOR wallet. Expected ${distributorWallet.address}, received ${distributorAddress}`
     );
   }
 
@@ -67,12 +81,11 @@ async function main() {
   }
 
   console.log("Done.");
-  console.log({
-    adminWallet: adminWallet.address,
-    contractAddress,
-    manufacturerAddress,
-    distributorAddress,
-  });
+  console.log("Rule: The deployer wallet is always manufacturer/admin until you build a real admin panel.");
+  console.log("adminWallet:", adminWallet.address || "not set");
+  console.log("contractAddress:", contractAddress || "not set");
+  console.log("manufacturerAddress:", manufacturerAddress || "not set");
+  console.log("distributorAddress:", distributorAddress || "not set");
 }
 
 main().catch((error) => {
