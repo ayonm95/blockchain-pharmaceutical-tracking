@@ -1,28 +1,38 @@
 import { ethers } from "hardhat";
 
-async function main() {
-  console.log("Preparing to deploy PharmaTree to Sepolia...");
-
-  // Get the account deploying the contract
-  const [deployer] = await ethers.getSigners();
-  if (!deployer) {
-    throw new Error("No deployer account found. Check your PRIVATE_KEY in the .env file.");
+function getManufacturerKey(): string {
+  const value = process.env.SEPOLIA_PRIVATE_KEY_MANUFACTURER || process.env.PRIVATE_KEY;
+  if (!value || !value.startsWith("0x") || value.length !== 66) {
+    throw new Error("Missing or invalid manufacturer private key. Set SEPOLIA_PRIVATE_KEY_MANUFACTURER or PRIVATE_KEY before deploying.");
   }
+  return value;
+}
 
-  console.log("Deploying contracts with the account:", deployer.address);
+async function main() {
+  const manufacturerKey = getManufacturerKey();
+  const provider = ethers.provider;
+  const deployer = new ethers.Wallet(manufacturerKey, provider);
 
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log("Account balance:", ethers.formatEther(balance), "ETH");
-
-  // Compile and deploy the contract
   const PharmaTree = await ethers.getContractFactory("PharmaTree");
-  console.log("Deploying PharmaTree...");
-  
-  const pharmaTree = await PharmaTree.deploy();
+  const pharmaTree = await PharmaTree.connect(deployer).deploy();
   await pharmaTree.waitForDeployment();
 
   const contractAddress = await pharmaTree.getAddress();
-  console.log(`PharmaTree successfully deployed to: ${contractAddress}`);
+
+  const hasManufacturerRole = await pharmaTree.isManufacturer(deployer.address);
+  const hasAdminRole = await pharmaTree.hasRole(await pharmaTree.DEFAULT_ADMIN_ROLE(), deployer.address);
+
+  if (!hasManufacturerRole) {
+    const tx = await pharmaTree.connect(deployer).addManufacturer(deployer.address);
+    await tx.wait();
+  }
+
+  if (!hasAdminRole) {
+    const tx = await pharmaTree.connect(deployer).grantRole(await pharmaTree.DEFAULT_ADMIN_ROLE(), deployer.address);
+    await tx.wait();
+  }
+
+  console.log(contractAddress);
 }
 
 main().catch((error) => {

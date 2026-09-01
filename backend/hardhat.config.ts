@@ -3,17 +3,19 @@ import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 
 dotenv.config();
-const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
-const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL || "";
+const LOCAL_DEPLOYER_KEY = process.env.PRIVATE_KEY || "";
+const SEPOLIA_DEPLOYER_KEY = process.env.SEPOLIA_PRIVATE_KEY_MANUFACTURER || "";
+
 const config: HardhatUserConfig = {
   solidity: "0.8.20",
   networks: {
     localhost: {
       url: "http://127.0.0.1:8545",
+      accounts: LOCAL_DEPLOYER_KEY ? [LOCAL_DEPLOYER_KEY] : [],
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
-      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
+      accounts: SEPOLIA_DEPLOYER_KEY ? [SEPOLIA_DEPLOYER_KEY] : [],
       chainId: Number(process.env.SEPOLIA_CHAIN_ID || 11155111),
     },
   },

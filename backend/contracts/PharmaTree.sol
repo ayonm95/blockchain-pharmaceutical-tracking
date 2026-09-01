@@ -149,10 +149,11 @@ contract PharmaTree is AccessControl {
         require(units[_id].pendingReceiver == msg.sender, "You are not the pending receiver");
 
         units[_id].pendingReceiver = address(0);
-        units[_id].status = Status.Rejected;
+        units[_id].status = Status.Active;
 
         emit TransferRejected(_id, units[_id].currentOwner, msg.sender);
     }
+    
 
     function markAsSold(uint256 _id) external onlyCurrentOwner(_id) {
         require(units[_id].status == Status.Active, "Unit is not active");

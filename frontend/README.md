@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PharmaTree Frontend
 
-## Getting Started
+A premium dashboard for the PharmaTree blockchain supply-chain system. It connects to the local Hardhat blockchain, reads contract state, and allows manufacturers and handlers to create medicine units, review inventory, and approve transfer workflows.
 
-First, run the development server:
+## Prerequisites
+
+- Node.js 18+
+- A running local Hardhat network from the backend project
+- The deployed PharmaTree contract address
+
+## Local setup
+
+From this directory:
 
 ```bash
+cp .env.example .env.local
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Required environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0x5FbDB2315678afecb367f032d93F642f64180aa3
+NEXT_PUBLIC_PINATA_API_KEY=
+NEXT_PUBLIC_PINATA_SECRET_API_KEY=
+```
 
-## Learn More
+## Backend pairing
 
-To learn more about Next.js, take a look at the following resources:
+Start the contract node from the backend folder:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+cd ../backend
+npx hardhat node
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Deploy the contract:
 
-## Deploy on Vercel
+```bash
+cd ../backend
+npx hardhat run scripts/deploy.ts --network localhost
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Then copy the deployed address into `NEXT_PUBLIC_PHARMA_TREE_CONTRACT` in `.env.local`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Production notes
+
+- The app reads the deployed contract address from `NEXT_PUBLIC_PHARMA_TREE_CONTRACT`.
+- For live environments, set the correct RPC URL and deployed contract address in the host environment.
+- Pinata variables are prepared for future metadata/IPFS uploads and are not required for the current local dashboard flow.
