@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+frontend/.next/
+backend/artifacts/
+backend/cache/
+backend/coverage/
+backend/typechain-types/
+
+# Local tooling output
+.playwright-mcp/
+backend/test/.wake/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+frontend/.env.local
+frontend/.env.*.local
+backend/.env
+backend/.env.*
+!.env.example
+
+# OS/editor files
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+
+# Logs
+*.log
