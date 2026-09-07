@@ -123,6 +123,24 @@ status changes.
 Do not commit private keys, RPC project IDs, API keys, `.env` files, build
 output, or dependency directories. Rotate credentials immediately if exposed.
 
+## Author
+**Ayon Moitra**
+* GitHub: [@your-github-username](https://github.com/your-github-username)
+* LinkedIn: [Your Profile](https://linkedin.com/in/your-profile)
+## Author
+
+**Ayon Moitra**
+* GitHub: [@ayonm95](https://github.com/ayonm95)
+* LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra-80b583320/)
+
+
+## Author
+
+**Ayon Moitra**
+* GitHub: [@ayonm95](https://github.com/ayonm95)
+* LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra-80b583320/)
+
+
 ## License
 
-No license has been selected yet. Add an explicit license before redistribution.
+Distributed under the MIT License. See `LICENSE` for more information.
