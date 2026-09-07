@@ -1,166 +1,71 @@
 # PharmaTree project documentation
 
-## 1. Project purpose
+## 1. Purpose
 
-PharmaTree is a blockchain-backed pharmaceutical supply-chain application. It
-creates a tamper-evident record for a medicine unit and tracks that unit as it
-moves between authorized participants such as a manufacturer, distributor, and
-pharmacy.
+PharmaTree is a blockchain-based pharmaceutical tracking application. It
+records medicine provenance from manufacturer creation through authorized
+handler transfers and final sale.
 
-The application uses a hierarchical model:
-
-```text
-Container
-└── Shipment
-    └── Batch
-        └── Box
-            └── Individual item
-```
-
-The hierarchy is represented by `parentId`, `rootId`, and the contract's
-`children` mapping. Every unit has an owner, manufacturer, status, quantity,
-and metadata string.
-
-## 2. Architecture
-
-```mermaid
-flowchart LR
-    U[User] --> M[MetaMask]
-    M --> F[Next.js frontend]
-    F -->|read-only JSON-RPC| P[Ethereum-compatible network]
-    F -->|signed transactions| P
-    P --> C[PharmaTree.sol]
-    C --> E[Events and on-chain unit state]
-    F --> I[Metadata helper]
-    I -->|metadata string / CID-like identifier| C
-    B[Hardhat scripts and tests] --> C
-```
-
-### Main components
-
-| Component | Location | Responsibility |
-| --- | --- | --- |
-| Smart contract | `backend/contracts/PharmaTree.sol` | Roles, unit hierarchy, ownership, transfers, and sale state |
-| Hardhat project | `backend/` | Compile, deploy, test, and run verification scripts |
-| Dashboard | `frontend/src/` | Wallet connection, contract reads, transaction forms, and views |
-| Contract client | `frontend/src/lib/pharmaTree.ts` | ABI, contract address, enum labels, and event definitions |
-| Metadata helper | `frontend/src/lib/ipfs.ts` | Builds medicine metadata and a CID-like identifier |
-
-## 3. User-facing features
-
-### Overview
-
-The overview page reads all units from the contract and summarizes units visible
-to the connected wallet, including active, pending, and sold counts.
-
-### Create medicine
-
-The create view validates a connected wallet and manufacturer/admin permission,
-then calls:
+The system models a product hierarchy:
 
 ```text
-createRootUnit(Container, "<medicine name>, <tablet count> tablets")
+Container -> Shipment -> Batch -> Box -> Individual item
 ```
 
-The transaction creates the first unit in a product tree. The deployer is the
-initial admin and manufacturer.
+Every unit has a numeric on-chain ID, parent/root lineage, level, manufacturer,
+current owner, pending receiver, status, quantity, and metadata.
 
-### Admin and role management
+## 2. Repository structure
 
-An admin can grant:
+This is a single root project. There are no separate `frontend/` or `backend/`
+directories.
 
-- `MANUFACTURER_ROLE` to wallets that create root units
-- `HANDLER_ROLE` to wallets that receive and handle units
+| Path | Responsibility |
+| --- | --- |
+| `contracts/PharmaTree.sol` | Roles, hierarchy, ownership, transfers, and sale |
+| `scripts/` | Local/Sepolia deployment and verification workflows |
+| `test/PharmaTree.test.ts` | Hardhat contract regression tests |
+| `src/app/` | Next.js routes |
+| `src/components/PharmaWalletView.tsx` | Main dashboard and wallet workflows |
+| `src/lib/pharmaTree.ts` | Frontend ABI, address, levels, and statuses |
+| `src/lib/ipfs.ts` | Medicine metadata formatting helper |
+| `public/` | Static frontend assets |
 
-The dashboard exposes role assignment. The contract also has removal methods;
-the current dashboard focuses on granting roles.
+## 3. Architecture
 
-### Transfers
-
-Transfers use a two-party handshake so the sender cannot silently change
-ownership:
-
-1. Current owner calls `initiateTransfer(unitId, receiver)`.
-2. Receiver must be an authorized manufacturer or handler.
-3. The unit becomes `PendingTransfer`.
-4. The selected receiver calls `acceptTransfer(unitId)`.
-5. Ownership changes and the unit returns to `Active`.
-
-The pending receiver may instead call `rejectTransfer`. The contract currently
-sets the status to `Rejected` when a pending transfer is rejected; this is an
-important behavior for clients to account for.
-
-### Inventory and sale
-
-Inventory displays unit details such as hierarchy, level, owner, pending
-receiver, status, quantity, and metadata. The current owner can call
-`markAsSold(unitId)`, which changes the unit to `Sold` and prevents later
-transfers.
-
-## 4. End-to-end workflows
-
-### Initial setup workflow
-
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant H as Hardhat
-    participant N as Local node or Sepolia
-    participant W as Wallet
-    participant UI as Next.js dashboard
-
-    Dev->>H: Compile PharmaTree.sol
-    H->>N: Deploy contract
-    N-->>Dev: Contract address
-    Dev->>UI: Set NEXT_PUBLIC_PHARMA_TREE_CONTRACT
-    W->>UI: Connect MetaMask
-    UI->>N: Read unitCounter and unit details
+```text
+MetaMask
+   |
+Next.js dashboard (ethers.js)
+   | read-only JSON-RPC / signed transactions
+Hardhat local node or Sepolia
+   |
+PharmaTree.sol
+   |
+On-chain unit state and immutable events
 ```
 
-### Medicine traceability workflow
+The frontend uses a read-only JSON-RPC provider to load units and event
+timestamps. MetaMask supplies the signer for state-changing operations. The
+contract remains the authority for roles, ownership, quantity, and status.
 
-```mermaid
-flowchart TD
-    A[Admin deploys contract] --> B[Grant manufacturer role]
-    B --> C[Manufacturer creates root unit]
-    C --> D[Owner optionally packs child units]
-    D --> E[Owner initiates transfer]
-    E --> F{Authorized receiver}
-    F -->|Accept| G[New owner receives active unit]
-    F -->|Reject| H[Unit becomes rejected]
-    G --> I[Next handler repeats transfer]
-    I --> J[Pharmacy marks unit sold]
-```
-
-### Read and write behavior
-
-1. The frontend creates a read-only `ethers.JsonRpcProvider` using
-   `NEXT_PUBLIC_RPC_URL`.
-2. It reads `unitCounter`, then loads each unit with
-   `getUnitDetails`.
-3. When MetaMask is connected, the frontend creates an
-   `ethers.BrowserProvider` and signer-bound contract.
-4. User actions submit signed transactions.
-5. The UI waits for transaction confirmation and reloads unit data.
-
-## 5. Smart-contract model
+## 4. Smart-contract model
 
 ### Roles
 
-| Role | Capabilities |
-| --- | --- |
-| Admin | Grant/revoke manufacturer and handler roles |
-| Manufacturer | Create root units; may transfer and accept/reject transfers |
-| Handler | Receive, transfer, accept, or reject units |
-| Current owner | Pack children, initiate transfer, and mark a unit sold |
+- **Admin:** grants and removes manufacturer and handler roles.
+- **Manufacturer:** creates root medicine units and participates in transfers.
+- **Handler:** receives, transfers, accepts, and rejects assigned units.
+- **Current owner:** can initiate transfers, create child units where allowed,
+  and mark active stock as sold.
 
-The constructor grants the deployer admin and manufacturer access.
+The deploying account is initialized as admin and manufacturer.
 
 ### Unit levels
 
-The Solidity enum order is part of the frontend ABI contract:
+The numeric enum order used by the contract and frontend is:
 
-| Numeric value | Level |
+| Value | Level |
 | ---: | --- |
 | 0 | Container |
 | 1 | Shipment |
@@ -170,110 +75,196 @@ The Solidity enum order is part of the frontend ABI contract:
 
 ### Statuses
 
-| Numeric value | Status | Meaning |
+| Value | Status | Meaning |
 | ---: | --- | --- |
 | 0 | Active | Available for normal ownership operations |
-| 1 | PendingTransfer | Transfer initiated; waiting for receiver |
+| 1 | PendingTransfer | Transfer initiated and awaiting receiver action |
 | 2 | Sold | Finalized and no longer transferable |
-| 3 | Rejected | Status label reserved by the contract/frontend mapping |
+| 3 | Rejected | Pending transfer was rejected |
 
-## 6. Technology stack
+## 5. Application workflows
 
-### Frontend
+### Create medicine
 
-- Next.js `16.3.1` with the App Router
-- React `19`
-- TypeScript
-- `ethers.js v6`
-- MetaMask browser provider for signed transactions
-- CSS modules and global CSS for dashboard styling
+An authorized manufacturer or admin creates a root unit with a level, metadata,
+and positive quantity. The frontend validates wallet connection, role, name,
+and quantity before submitting the transaction.
 
-Routes are thin wrappers around the reusable `PharmaWalletView` component:
+### Partial transfer
 
-| Route | View |
+The current owner can transfer all or part of an active unit's quantity to an
+authorized receiver. A partial transfer:
+
+1. Validates that the quantity is positive and in stock.
+2. Keeps the remainder on the sender's unit.
+3. Creates a child transfer unit for the quantity being sent.
+4. Records the pending receiver.
+5. Requires the receiver to accept or reject the transfer.
+
+Manufacturer views preserve lineage labels such as `1.1`. Handler inventory
+uses wallet-local numbering such as `1` and `2`, so units received from
+different senders are not incorrectly grouped together.
+
+### Transfer acceptance/rejection
+
+The receiver must be authorized and must match the pending receiver stored on
+the unit. Acceptance changes ownership and returns the unit to `Active`.
+Rejection clears the pending receiver and sets the unit to `Rejected`.
+
+### Sale
+
+The current owner can mark an active unit as sold. The contract sells the
+selected unit as a whole; the dashboard quantity field is used to verify that
+the requested amount does not exceed available stock. Sold units cannot be
+transferred again.
+
+### Role administration
+
+The admin view grants manufacturer and handler roles. The dashboard prevents
+non-admin users from granting manufacturer roles and checks receiver
+authorization before transfer submission.
+
+## 6. Frontend routes
+
+All routes render the reusable `PharmaWalletView` component with a different
+view mode:
+
+| Route | Purpose |
 | --- | --- |
-| `/` | Overview |
-| `/create` | Create medicine |
-| `/admin` | Role administration |
-| `/transfers` | Transfer actions |
-| `/inventory` | Unit inventory |
+| `/` | Overview, status summaries, and recent activity |
+| `/create` | Create root medicine units |
+| `/admin` | Grant manufacturer and handler roles |
+| `/transfers` | Initiate, accept, reject, and review transfers |
+| `/inventory` | View owned stock, lineage, quantity, and status |
 
-### Backend and blockchain
+The dashboard distinguishes manufacturer-created medicines from handler
+inventory. Manufacturer tables preserve creation and lineage context; handler
+tables focus on current stock and transfer status.
 
-- Solidity `0.8.20`
-- Hardhat `2.x`
-- Ethers `6.x`
-- OpenZeppelin `AccessControl`
-- Chai/Mocha tests through Hardhat Toolbox
-- Local Hardhat node or Sepolia testnet
+## 7. Environment configuration
 
-## 7. Configuration
+Create local files from the committed templates:
 
-### Backend `.env`
+```bash
+cp .env.example .env
+cp .env.local.example .env.local
+```
 
-Copy `backend/.env.example` to `backend/.env` and configure:
+`.env.example` contains deployment variables such as:
 
-- `RPC_URL` and `PRIVATE_KEY` for local development
-- `SEPOLIA_RPC_URL` and `SEPOLIA_PRIVATE_KEY_MANUFACTURER` for Sepolia
-- optional distributor key/address for multi-wallet verification
-- `SEPOLIA_CONTRACT_ADDRESS` after deployment
-- `ETHERSCAN_API_KEY` if contract verification is required
+- `RPC_URL` and `PRIVATE_KEY` for local scripts.
+- `SEPOLIA_RPC_URL` and `SEPOLIA_PRIVATE_KEY_MANUFACTURER` for Sepolia.
+- Optional distributor/manufacturer addresses and keys.
+- `ETHERSCAN_API_KEY` for verification.
 
-### Frontend `.env.local`
-
-Copy `frontend/.env.example` to `frontend/.env.local`:
+`.env.local.example` contains browser configuration:
 
 ```dotenv
 NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
+NEXT_PUBLIC_CHAIN_ID=31337
 NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xYOUR_DEPLOYED_CONTRACT_ADDRESS
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=
+NEXT_PUBLIC_PINATA_API_KEY=
+NEXT_PUBLIC_PINATA_SECRET_API_KEY=
 ```
 
-The frontend address must match the network selected in MetaMask.
+Use chain ID `11155111` and the Sepolia RPC URL for Sepolia. Never commit
+`.env`, `.env.local`, private keys, API keys, or real RPC project IDs.
 
-## 8. Development and verification
+## 8. Local development
+
+From the repository root:
 
 ```bash
-# backend
-cd backend
 npm install
 npm run compile
 npm test
+```
+
+Start the local chain:
+
+```bash
 npm run node
+```
 
-# in another terminal, after the node is running
-npm run deploy
+In another terminal, deploy the contract:
 
-# frontend
-cd ../frontend
-npm install
+```bash
+npx hardhat run scripts/deploy.ts --network localhost
+```
+
+Set the printed address in `.env.local`, connect MetaMask to
+`http://127.0.0.1:8545` with chain ID `31337`, import a funded Hardhat account,
+and start the dashboard:
+
+```bash
 npm run dev
+```
+
+Open <http://localhost:3000>.
+
+## 9. Sepolia deployment
+
+After filling the required values in `.env`:
+
+```bash
+npm run deploy:sepolia
+npm run deploy:fresh-manufacturer
+npm run verify:sepolia
+npm run verify:sepolia-two-wallet
+```
+
+The fresh manufacturer script deploys a new contract, assigns the manufacturer
+role, and updates the local contract address/deployment block configuration.
+Use a dedicated Sepolia test wallet with no real funds.
+
+## 10. Validation
+
+Automated checks:
+
+```bash
+npm run compile
+npm test
 npm run lint
 npm run build
 ```
 
-For Sepolia, configure the backend environment and run:
+The contract suite covers:
 
-```bash
-cd backend
-npm run deploy:sepolia
-npm run verify:sepolia-two-wallet
-```
+- Admin and role authorization.
+- Root and child unit creation.
+- Partial quantity transfers.
+- Parent/child packing authorization.
+- Transfer acceptance and rejection.
+- Ownership changes.
+- Sale detachment and transfer prevention.
 
-The two-wallet verification script grants roles, creates a root unit, initiates
-a manufacturer-to-distributor transfer, accepts it from the distributor wallet,
-and prints the final state.
+Manual dashboard checks:
 
-## 9. Current limitations and next improvements
+1. Connect a manufacturer wallet.
+2. Create medicine and confirm it appears in Overview and Inventory.
+3. Grant a handler role.
+4. Transfer a full quantity and accept it from the handler wallet.
+5. Transfer a partial quantity and verify the sender remainder.
+6. Confirm handler inventory uses separate local unit numbers.
+7. Try an unauthorized receiver and an over-quantity transfer.
+8. Sell active stock and confirm it cannot be transferred afterward.
 
-- `frontend/src/lib/ipfs.ts` currently builds a deterministic CID-like string
-  locally. It does not upload data to Pinata/IPFS yet, even though Pinata
-  packages and environment placeholders exist.
-- The dashboard currently stores simple metadata directly in the contract for
-  the create flow instead of calling the metadata helper.
-- Unit loading performs one read per unit. An indexed event/subgraph or a
-  contract pagination strategy would scale better for large inventories.
-- The frontend uses the first configured contract address and requires manual
-  network/address configuration.
-- Admin role removal and a dedicated admin-only route are not fully exposed in
-  the dashboard.
-- Private keys must stay in local environment files and must never be committed.
+## 11. Known limitations
+
+- `src/lib/ipfs.ts` formats metadata locally; production pinning requires
+  configuring a secure server-side Pinata/IPFS integration.
+- Unit reads currently iterate through the contract's unit counter. A subgraph,
+  indexed API, or pagination strategy would scale better for large deployments.
+- Contract addresses and network settings are supplied through environment
+  variables and must match the connected MetaMask network.
+- The current contract sale operation is whole-unit sale rather than a
+  partial-sale transaction.
+
+## 12. Security and public release
+
+- Keep all secrets in ignored local environment files.
+- Use placeholder values in committed templates.
+- Do not expose private keys in scripts, screenshots, logs, issues, or commits.
+- Use a dedicated test wallet for local and Sepolia automation.
+- Rotate any credential that may have been exposed.
