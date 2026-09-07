@@ -33,6 +33,38 @@ directories.
 
 ## 3. Architecture
 
+### System architecture
+
+```mermaid
+flowchart LR
+    U[Manufacturer / Handler / Admin] --> MM[MetaMask]
+    MM --> UI[Next.js dashboard]
+    UI -->|Read-only JSON-RPC| RPC[Hardhat node or Sepolia]
+    UI -->|Signed transactions| RPC
+    RPC --> C[PharmaTree.sol]
+    C --> S[On-chain unit state]
+    C --> E[Transfer and sale events]
+    UI --> H[Activity and inventory views]
+    UI --> M[Metadata formatter]
+    M --> C
+```
+
+### Application layers
+
+```mermaid
+flowchart TB
+    Routes[Next.js routes] --> Wallet[PharmaWalletView]
+    Wallet --> Provider[ethers read-only provider]
+    Wallet --> Signer[MetaMask signer]
+    Wallet --> ABI[ABI and enum mappings]
+    Wallet --> Metadata[Metadata helper]
+    Provider --> Contract[PharmaTree.sol]
+    Signer --> Contract
+    Contract --> Roles[Roles]
+    Contract --> Units[Hierarchy and quantities]
+    Contract --> Events[Immutable events]
+```
+
 ```text
 MetaMask
    |
@@ -83,6 +115,88 @@ The numeric enum order used by the contract and frontend is:
 | 3 | Rejected | Pending transfer was rejected |
 
 ## 5. Application workflows
+
+### End-to-end setup workflow
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant H as Hardhat
+    participant N as Local node or Sepolia
+    participant W as MetaMask
+    participant UI as Dashboard
+
+    Dev->>H: npm run compile
+    Dev->>H: npm test
+    Dev->>N: Deploy PharmaTree.sol
+    N-->>Dev: Contract address and deployment block
+    Dev->>UI: Configure .env.local
+    W->>UI: Connect wallet
+    UI->>N: Read units and events
+    UI-->>W: Render inventory and activity
+```
+
+### Medicine traceability workflow
+
+```mermaid
+flowchart TD
+    A[Deploy contract] --> B[Grant manufacturer role]
+    B --> C[Create root medicine unit]
+    C --> D{Divide quantity?}
+    D -->|Yes| E[Create partial child transfer]
+    D -->|No| F[Transfer complete unit]
+    E --> G[Receiver accepts or rejects]
+    F --> G
+    G -->|Accept| H[Receiver owns active stock]
+    G -->|Reject| I[Unit becomes rejected]
+    H --> J{Transfer onward?}
+    J -->|Yes| K[Repeat transfer handshake]
+    K --> H
+    J -->|No| L[Mark active stock sold]
+```
+
+### Partial transfer and lineage workflow
+
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant C as PharmaTree.sol
+    participant R as Receiver
+    participant UI as Dashboard
+
+    S->>UI: Enter unit, receiver, and quantity
+    UI->>UI: Validate quantity is in stock
+    UI->>C: initiatePartialTransfer(...)
+    C->>C: Reduce sender remainder
+    C->>C: Create child with parent/root lineage
+    C-->>R: Store pending receiver
+    R->>C: acceptTransfer(child)
+    C->>C: Set receiver as current owner
+    C-->>UI: Emit completion event
+    UI->>UI: Refresh inventory and lineage
+```
+
+### Transfer rejection workflow
+
+```mermaid
+flowchart LR
+    Owner[Current owner] --> Start[Initiate transfer]
+    Start --> Pending[PendingTransfer]
+    Pending --> Receiver{Pending receiver}
+    Receiver -->|Accept| Active[Active under new owner]
+    Receiver -->|Reject| Rejected[Rejected]
+    Rejected --> Review[Review and initiate a valid transfer]
+```
+
+### Sale workflow
+
+```mermaid
+flowchart LR
+    Stock[Active stock] --> Validate[Validate unit and quantity]
+    Validate --> Sell[markAsSold]
+    Sell --> Sold[Sold]
+    Sold --> Block[Future transfers blocked]
+```
 
 ### Create medicine
 
