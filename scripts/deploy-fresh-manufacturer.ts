@@ -56,7 +56,7 @@ async function main() {
   }
 
   const backendEnv = path.resolve(process.cwd(), ".env");
-  const frontendEnv = path.resolve(process.cwd(), "../frontend/.env.local");
+  const frontendEnv = path.resolve(process.cwd(), ".env.local");
   await replaceEnvValue(backendEnv, "SEPOLIA_CONTRACT_ADDRESS", contractAddress);
   await replaceEnvValue(frontendEnv, "NEXT_PUBLIC_PHARMA_TREE_CONTRACT", contractAddress);
   if (deploymentReceipt?.blockNumber !== undefined) {

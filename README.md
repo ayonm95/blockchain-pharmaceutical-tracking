@@ -1,147 +1,90 @@
 # Blockchain-Based Pharmaceutical Tracking
 
 PharmaTree is a blockchain-backed pharmaceutical supply-chain dashboard. It
-tracks medicine from manufacturer creation through authorized transfers,
-inventory ownership, partial quantities, and final sale.
-
-The project contains:
-
-- A Solidity smart contract with manufacturer and handler roles.
-- A Hardhat backend for compilation, testing, local deployment, and Sepolia
-  workflows.
-- A Next.js dashboard using ethers.js and MetaMask.
-- Quantity-aware partial transfers with parent/partition lineage.
-- Inventory, transfer, role-management, and sale workflows.
-
-## Architecture
-
-```text
-Manufacturer -> PharmaTree.sol -> Handler -> Handler/Pharmacy -> Sold
-                         |
-                         +-- Unit hierarchy and immutable events
-```
-
-The contract stores each unit's parent, root, manufacturer, owner, pending
-receiver, status, quantity, and metadata. The frontend reads this state and
-uses contract events for timestamps and transfer history.
+tracks medicine creation, ownership, authorized transfers, partial quantities,
+lineage, inventory, and final sale.
 
 ## Repository layout
 
 ```text
-backend/
-  contracts/PharmaTree.sol   Smart contract
-  scripts/                   Deployment and verification scripts
-  test/PharmaTree.test.ts    Contract regression tests
-frontend/
-  src/components/            Dashboard UI and wallet workflows
-  src/lib/pharmaTree.ts      ABI and contract configuration
+contracts/PharmaTree.sol   Solidity contract
+scripts/                   Deployment and verification scripts
+test/PharmaTree.test.ts    Hardhat regression tests
+src/                       Next.js dashboard
+public/                    Frontend assets
 ```
+
+The repository intentionally uses one root project. There are no separate
+`frontend/` or `backend/` folders.
 
 ## Prerequisites
 
-- Node.js 18 or newer
+- Node.js 18+
 - npm
 - MetaMask
-- Git
-- Optional: an Infura/Alchemy Sepolia RPC endpoint and funded Sepolia wallet
+- Optional Sepolia RPC endpoint and funded test wallet
 
-## Local development
-
-### 1. Install backend dependencies
+## Local setup
 
 ```bash
-cd backend
 npm install
-```
-
-### 2. Compile and test the contract
-
-```bash
 npm run compile
 npm test
+npm run lint
+npm run build
 ```
 
-The test suite covers roles, root and child units, transfers, partial
-quantities, rejection, and sale state.
-
-### 3. Start a local blockchain
-
-In one terminal:
+Start the local blockchain in one terminal:
 
 ```bash
-cd backend
 npm run node
 ```
 
-Keep this process running. Hardhat prints funded development accounts that can
-be imported into a local MetaMask network.
-
-### 4. Deploy locally
-
-In another terminal:
+Deploy in another terminal:
 
 ```bash
-cd backend
 npx hardhat run scripts/deploy.ts --network localhost
 ```
 
-Copy the printed contract address into the frontend environment file.
-
-### 5. Configure and start the frontend
+Copy the printed address into `.env.local.example`, save the result as
+`.env.local`, and start the dashboard:
 
 ```bash
-cd frontend
-cp .env.example .env.local
-npm install
+cp .env.local.example .env.local
 npm run dev
 ```
 
-Open <http://localhost:3000>, connect MetaMask to the local Hardhat network,
-and import a Hardhat account. The frontend must use the same chain and
-contract address as the backend deployment.
+Open <http://localhost:3000>, connect MetaMask to `http://127.0.0.1:8545`
+(chain ID `31337`), and import a funded account printed by Hardhat.
 
-## Frontend environment
+## Environment files
 
-Create `frontend/.env.local` from `frontend/.env.example`:
+`.env.example` contains backend deployment variables. `.env.local.example`
+contains browser variables:
 
 ```dotenv
 NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
 NEXT_PUBLIC_CHAIN_ID=31337
-NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xYOUR_LOCAL_CONTRACT
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xYOUR_DEPLOYED_CONTRACT_ADDRESS
 NEXT_PUBLIC_DEPLOYMENT_BLOCK=
+NEXT_PUBLIC_PINATA_API_KEY=
+NEXT_PUBLIC_PINATA_SECRET_API_KEY=
 ```
 
-For Sepolia, use chain ID `11155111`, a public RPC URL, and the deployed
-contract address. Never commit `.env.local`.
+Never commit `.env` or `.env.local`. Only placeholder templates belong in Git.
 
 ## Sepolia deployment
 
-Copy the backend template and fill it locally:
-
 ```bash
-cd backend
 cp .env.example .env
-```
-
-Required values depend on the selected script. For the fresh manufacturer
-deployment, set:
-
-```dotenv
-SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/YOUR_PROJECT_ID
-SEPOLIA_PRIVATE_KEY_MANUFACTURER=0xYOUR_PRIVATE_KEY
-```
-
-Then run:
-
-```bash
 npm run deploy:fresh-manufacturer
 ```
 
-The script deploys a new contract, grants the derived manufacturer address its
-role, and updates local backend/frontend environment files. Review the output
-before using the new deployment.
+Set `SEPOLIA_RPC_URL`, `SEPOLIA_PRIVATE_KEY_MANUFACTURER`, and the other
+required values in `.env` first. Use a dedicated test wallet and never use a
+wallet containing real funds.
 
-Other available workflows:
+Available workflows:
 
 ```bash
 npm run deploy:sepolia
@@ -149,57 +92,37 @@ npm run verify:sepolia
 npm run verify:sepolia-two-wallet
 ```
 
-Never use a wallet containing real funds for development automation. Use a
-dedicated test wallet and keep private keys outside Git.
-
-## Application workflows
+## Application workflow
 
 1. Admin grants manufacturer or handler roles.
 2. A manufacturer creates a root medicine unit.
-3. The current owner transfers a full or partial quantity to an authorized
-   wallet.
+3. The owner transfers a full or partial quantity to an authorized wallet.
 4. The receiver accepts or rejects the pending transfer.
-5. Owners can inspect inventory and mark active stock as sold.
-6. Manufacturer views preserve lineage; handler views use wallet-local unit
-   numbering for received inventory.
+5. Owners inspect inventory and mark active stock as sold.
+6. Manufacturer views preserve lineage; handler views use wallet-local numbering.
 
-The contract enforces authorization and ownership. The frontend also validates
-wallet addresses, active ownership, positive whole-number quantities, receiver
-roles, and sale quantities before opening MetaMask.
+The contract enforces roles, ownership, quantities, and transfer handshakes.
+The dashboard validates addresses, stock, quantities, and receiver roles before
+opening MetaMask.
 
-## Verification checklist
+## Validation
 
 ```bash
-cd backend
 npm run compile
 npm test
-
-cd ../frontend
-npm run build
 npm run lint
+npm run build
 ```
 
-Manual checks:
+Manual checks should cover creating medicine, granting a handler role, full and
+partial transfers, accept/reject flows, over-quantity validation, and sale
+status changes.
 
-- Connect a manufacturer wallet.
-- Create a unit and verify it appears in Overview and Inventory.
-- Grant a handler role.
-- Transfer a full and partial quantity.
-- Accept the transfer from the receiver wallet.
-- Confirm handler-local numbering starts at Unit 1.
-- Attempt an unauthorized receiver and an over-quantity transfer.
-- Attempt to sell more than the available quantity.
-- Mark active stock sold and confirm the status changes.
+## Security
 
-## Security and public-repository rules
-
-- `.env`, `.env.local`, private keys, RPC project IDs, and API keys are ignored.
-- Only placeholder values belong in committed environment templates.
-- Do not paste secrets into issues, pull requests, screenshots, or logs.
-- Rotate any credential that was accidentally exposed.
-- Treat Sepolia private keys as sensitive even though Sepolia is a test network.
+Do not commit private keys, RPC project IDs, API keys, `.env` files, build
+output, or dependency directories. Rotate credentials immediately if exposed.
 
 ## License
 
-No license has been selected yet. Add an explicit license before distributing
-the project for reuse.
+No license has been selected yet. Add an explicit license before redistribution.
