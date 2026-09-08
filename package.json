@@ -2,6 +2,20 @@
   "name": "pharmatree",
   "version": "0.1.0",
   "private": true,
+  "description": "Blockchain-based pharmaceutical supply-chain tracking dashboard",
+  "author": {
+    "name": "Ayon Moitra",
+    "url": "https://github.com/ayonm95"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ayonm95/blockchain-pharmaceutical-tracking.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ayonm95/blockchain-pharmaceutical-tracking/issues"
+  },
+  "homepage": "https://github.com/ayonm95/blockchain-pharmaceutical-tracking#readme",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

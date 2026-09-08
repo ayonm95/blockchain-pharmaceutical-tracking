@@ -382,3 +382,14 @@ Manual dashboard checks:
 - Do not expose private keys in scripts, screenshots, logs, issues, or commits.
 - Use a dedicated test wallet for local and Sepolia automation.
 - Rotate any credential that may have been exposed.
+
+## 13. Author and project links
+
+**Ayon Moitra**
+
+- GitHub: [@ayonm95](https://github.com/ayonm95)
+- Repository: [blockchain-pharmaceutical-tracking](https://github.com/ayonm95/blockchain-pharmaceutical-tracking)
+- Issues: [GitHub Issues](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/issues)
+- LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra-80b583320/)
+
+This project is distributed under the [MIT License](./LICENSE).
