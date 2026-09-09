@@ -246,11 +246,21 @@ function VerifyContent() {
       <header style={styles.header}>
         <div style={styles.brand}>
           <span style={styles.logoCross}>✚</span>
-          <span style={styles.brandTitle}>PHARMATREE VERIFY</span>
+          <span style={styles.brandTitle}>PHARMATREE</span>
+          <span style={{ fontSize: "11px", background: "rgba(13, 148, 136, 0.15)", color: "#0d9488", padding: "3px 8px", borderRadius: "4px", fontWeight: 700, letterSpacing: "0.05em" }}>
+            VERIFY CHAIN
+          </span>
         </div>
-        <Link href="/" style={styles.navLink}>
-          Back to Dashboard →
-        </Link>
+        <nav style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+          <Link href="/" style={styles.navLink}>🏠 Overview</Link>
+          <Link href="/inventory" style={styles.navLink}>📦 Inventory</Link>
+          <Link href="/transfers" style={styles.navLink}>🔁 Transfers</Link>
+          <Link href="/create" style={styles.navLink}>🧴 Create</Link>
+          <Link href="/admin" style={styles.navLink}>🛡️ Admin</Link>
+          <Link href="/" style={{ ...styles.navLink, background: "#0d9488", color: "#ffffff", border: "1px solid #0d9488", fontWeight: 600 }}>
+            ← Dashboard
+          </Link>
+        </nav>
       </header>
 
       {/* Main Container */}
@@ -302,15 +312,37 @@ function VerifyContent() {
           <div style={styles.contentGrid}>
             {/* Authenticity Card */}
             <section style={styles.card}>
-              <div style={styles.verifiedBanner}>
-                <div style={styles.checkCircle}>✓</div>
-                <div>
-                  <h2 style={styles.verifiedTitle}>Verified Authentic Pharmaceutical</h2>
-                  <p style={styles.verifiedSubtitle}>
-                    Immutable proof of manufacture registered on Ethereum Sepolia
-                  </p>
+              {unit.status === 2 ? (
+                <div style={{ ...styles.verifiedBanner, backgroundColor: "#fff7ed", border: "1px solid #fed7aa" }}>
+                  <div style={{ ...styles.checkCircle, backgroundColor: "#ea580c" }}>⚠️</div>
+                  <div>
+                    <h2 style={{ ...styles.verifiedTitle, color: "#9a3412" }}>Dispensed / Sold Item Notice</h2>
+                    <p style={{ ...styles.verifiedSubtitle, color: "#c2410c" }}>
+                      Anti-Counterfeit Warning: This unit was already registered as SOLD to a patient. If you are purchasing this as new unopened stock, verify packaging integrity or report potential QR duplication.
+                    </p>
+                  </div>
                 </div>
-              </div>
+              ) : unit.status === 3 ? (
+                <div style={{ ...styles.verifiedBanner, backgroundColor: "#fef2f2", border: "1px solid #fecaca" }}>
+                  <div style={{ ...styles.checkCircle, backgroundColor: "#dc2626" }}>✕</div>
+                  <div>
+                    <h2 style={{ ...styles.verifiedTitle, color: "#991b1b" }}>Custody Transfer Rejected</h2>
+                    <p style={{ ...styles.verifiedSubtitle, color: "#b91c1c" }}>
+                      Warning: This unit was rejected during custody handoff and is not authorized for dispensing.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div style={styles.verifiedBanner}>
+                  <div style={styles.checkCircle}>✓</div>
+                  <div>
+                    <h2 style={styles.verifiedTitle}>Verified Authentic Pharmaceutical</h2>
+                    <p style={styles.verifiedSubtitle}>
+                      Immutable proof of manufacture registered on Ethereum Sepolia
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div style={styles.detailGrid}>
                 <div style={styles.detailItem}>

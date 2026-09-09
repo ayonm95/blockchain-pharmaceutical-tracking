@@ -100,11 +100,12 @@ as `1.1`; handler views use wallet-local numbering such as `1` and `2`.
 - Over-quantity transfer and sale validation.
 - Whole-unit sale operation with transfer prevention after sale.
 
-### Public QR verification & provenance audit
+### Public QR verification, provenance audit & anti-counterfeit guard
 
-- Interactive QR modal in inventory cards with PNG download and direct verification link sharing.
+- Seamless in-dashboard navigation via sidebar "Verify Chain", topbar quick search, and direct QR buttons across all inventory items and child partitions.
 - Dedicated consumer portal at `/verify` enabling wallet-less on-chain provenance inspection.
-- Real-time authenticity badge, manufacturer verification, batch details, and immutable custody audit trail.
+- Anti-Counterfeit Dispensing Guard: Dynamic status detection flagging duplicate scans as "Dispensed / Sold Item" or "Transfer Rejected" to prevent counterfeit packaging re-use.
+- Real-time authenticity badge, verified manufacturer proof, batch details, and immutable Sepolia custody audit trail.
 
 ### Administration
 

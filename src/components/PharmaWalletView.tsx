@@ -8,7 +8,7 @@ import QRCode from "qrcode";
 import styles from "@/app/page.module.css";
 import { PHARMA_TREE_ABI, PHARMA_TREE_CHAIN_ID, PHARMA_TREE_CONTRACT, unitLevelToName } from "@/lib/pharmaTree";
 
-type ViewMode = "overview" | "transfers" | "inventory" | "create" | "admin";
+type ViewMode = "overview" | "transfers" | "inventory" | "create" | "admin" | "verify";
 
 type UnitRecord = {
   id: string;
@@ -113,6 +113,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [copiedLink, setCopiedLink] = useState(false);
   const [actionPopup, setActionPopup] = useState<ActionPopup | null>(null);
+  const [headerSearchId, setHeaderSearchId] = useState("");
   const actionInFlight = useRef(false);
   const router = useRouter();
 
@@ -997,6 +998,39 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         </div>
 
         <div className={styles.headerActions}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const val = headerSearchId.trim();
+              if (val) router.push(`/verify?unitId=${encodeURIComponent(val)}`);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <input
+              type="text"
+              placeholder="Unit # (e.g. 1)"
+              value={headerSearchId}
+              onChange={(e) => setHeaderSearchId(e.target.value)}
+              style={{
+                background: "rgba(15, 23, 42, 0.6)",
+                border: "1px solid rgba(255, 255, 255, 0.2)",
+                borderRadius: "8px",
+                padding: "8px 12px",
+                color: "#ffffff",
+                fontSize: "13px",
+                width: "120px",
+                outline: "none",
+              }}
+            />
+            <button
+              type="submit"
+              className={styles.secondaryButton}
+              style={{ padding: "8px 12px", fontSize: "13px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}
+            >
+              <span>🔍</span>
+              <span>Verify</span>
+            </button>
+          </form>
           <button className={styles.primaryButton} onClick={() => void connectWallet()} disabled={loading}>
             {loading ? "Connecting..." : connected ? (account ? `${account.slice(0, 6)}...${account.slice(-4)}` : "Connected") : "Connect wallet"}
           </button>
@@ -1035,6 +1069,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
             <Link className={`${styles.sideItem} ${mode === "inventory" ? styles.sideItemActive : ""}`} href="/inventory">
               <span className={styles.icon}>📦</span>
               <span>Inventory</span>
+            </Link>
+            <Link className={`${styles.sideItem} ${mode === "verify" ? styles.sideItemActive : ""}`} href="/verify">
+              <span className={styles.icon}>🔍</span>
+              <span>Verify Chain</span>
             </Link>
           </nav>
         </aside>
@@ -1119,6 +1157,29 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                         const rootExpanded = !!expandedUnits[`overview-${root.id}`];
                         return (
                           <div className={styles.createdMedicineGroup} key={root.id}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 14px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                              <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 500 }}>Batch #{root.displayId} · {medName}</span>
+                              <div style={{ display: "flex", gap: "6px" }}>
+                                <button
+                                  type="button"
+                                  className={styles.secondaryButton}
+                                  style={{ padding: "3px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", cursor: "pointer" }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void openQrModal(root);
+                                  }}
+                                >
+                                  📱 QR
+                                </button>
+                                <Link
+                                  href={`/verify?unitId=${root.id}`}
+                                  className={styles.secondaryButton}
+                                  style={{ padding: "3px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", textDecoration: "none", color: "#1e293b" }}
+                                >
+                                  🔍 Verify
+                                </Link>
+                              </div>
+                            </div>
                             <button
                               type="button"
                               className={styles.tableRow}
@@ -1557,6 +1618,32 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                           </span>
                         </button>
 
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", borderTop: "1px solid #f1f5f9", background: "#f8fafc", flexWrap: "wrap", gap: "8px" }}>
+                          <span style={{ fontSize: "12px", color: "#64748b" }}>
+                            {unit.parentId === "0" ? "📦 Root Batch Unit" : `↳ Sub-partition of Unit #${unit.parentId}`}
+                          </span>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              type="button"
+                              className={styles.secondaryButton}
+                              style={{ padding: "5px 12px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "5px", cursor: "pointer" }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void openQrModal(unit);
+                              }}
+                            >
+                              📱 QR Code
+                            </button>
+                            <Link
+                              href={`/verify?unitId=${unit.id}`}
+                              className={styles.secondaryButton}
+                              style={{ padding: "5px 12px", fontSize: "12px", display: "inline-flex", alignItems: "center", gap: "5px", textDecoration: "none", color: "#1e293b" }}
+                            >
+                              🔍 Verify Chain
+                            </Link>
+                          </div>
+                        </div>
+
                         {isExpanded && (
                           <div className={styles.inventoryTileContent}>
                             <p style={{ margin: 0, color: '#334155' }}>
@@ -1632,6 +1719,26 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                             <strong>{truncate(partition.currentOwner)}</strong>
                                             <span>To</span>
                                             <strong>{truncate(partition.pendingReceiver)}</strong>
+                                            <div style={{ display: "flex", gap: "8px", marginTop: "8px", gridColumn: "1 / -1" }}>
+                                              <button
+                                                type="button"
+                                                className={styles.secondaryButton}
+                                                style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", cursor: "pointer" }}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  void openQrModal(partition);
+                                                }}
+                                              >
+                                                📱 QR Code
+                                              </button>
+                                              <Link
+                                                href={`/verify?unitId=${partition.id}`}
+                                                className={styles.secondaryButton}
+                                                style={{ padding: "4px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "4px", textDecoration: "none", color: "#1e293b" }}
+                                              >
+                                                🔍 Verify Chain
+                                              </Link>
+                                            </div>
                                           </div>
                                         )}
                                       </div>
