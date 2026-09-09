@@ -26,6 +26,7 @@ directories.
 | `scripts/` | Local/Sepolia deployment and verification workflows |
 | `test/PharmaTree.test.ts` | Hardhat contract regression tests |
 | `src/app/` | Next.js routes |
+| `src/app/verify/page.tsx` | Public medicine provenance verification & QR audit trail |
 | `src/components/PharmaWalletView.tsx` | Main dashboard and wallet workflows |
 | `src/lib/pharmaTree.ts` | Frontend ABI, address, levels, and statuses |
 | `src/lib/ipfs.ts` | Medicine metadata formatting helper |
@@ -187,6 +188,24 @@ flowchart LR
     Receiver -->|Reject| Rejected[Rejected]
     Rejected --> Review[Review and initiate a valid transfer]
 ```
+
+### QR Code Verification & Public Provenance (/verify)
+
+PharmaTree provides an open verification portal enabling consumers, pharmacies, and regulators to verify authenticity without requiring Web3 wallets:
+
+```mermaid
+flowchart LR
+    Pack[Medicine Package / Batch] --> QR[Scannable QR Code]
+    QR --> Mobile[Phone camera or browser]
+    Mobile --> Page[/verify?unitId=X]
+    Page --> RPC[Sepolia JSON-RPC read]
+    RPC --> SmartContract[PharmaTree.sol]
+    SmartContract --> Audit[Authenticity Badge + Custody Timeline + Etherscan Links]
+```
+
+1. **In-Dashboard QR Generation**: Handlers and manufacturers can click **View Public QR Code** on any inventory item or modal to generate, copy, or download a printable high-resolution PNG QR label.
+2. **Public Provenance Audit**: Scanning the QR code opens `/verify?unitId=X`, displaying the authenticity status, verified manufacturer wallet, container level, and an immutable chronological custody audit trail with direct links to Sepolia Etherscan.
+3. **Manual Unit Search**: Allows manual lookups for any unit ID directly from the verification interface.
 
 ### Sale workflow
 

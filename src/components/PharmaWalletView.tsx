@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ethers } from "ethers";
+import QRCode from "qrcode";
 import styles from "@/app/page.module.css";
 import { PHARMA_TREE_ABI, PHARMA_TREE_CHAIN_ID, PHARMA_TREE_CONTRACT, unitLevelToName } from "@/lib/pharmaTree";
 
@@ -108,6 +109,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>({});
   const [modalUnit, setModalUnit] = useState<UnitRecord | null>(null);
+  const [qrModalUnit, setQrModalUnit] = useState<UnitRecord | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [copiedLink, setCopiedLink] = useState(false);
   const [actionPopup, setActionPopup] = useState<ActionPopup | null>(null);
   const actionInFlight = useRef(false);
   const router = useRouter();
@@ -763,6 +767,27 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const formatAddress = (addr?: string) => {
     if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
+  const openQrModal = async (unit: UnitRecord) => {
+    setQrModalUnit(unit);
+    setCopiedLink(false);
+    setQrDataUrl("");
+    try {
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const verifyUrl = `${origin}/verify?unitId=${unit.id}`;
+      const dataUrl = await QRCode.toDataURL(verifyUrl, {
+        width: 280,
+        margin: 2,
+        color: {
+          dark: "#0f172a",
+          light: "#ffffff",
+        },
+      });
+      setQrDataUrl(dataUrl);
+    } catch (err) {
+      console.error("Failed to generate QR code:", err);
+    }
   };
 
   const getMedicineName = (metadata?: string) => {
@@ -1549,6 +1574,16 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                             <p style={{ margin: 0, color: '#334155' }}><strong>Accepted:</strong> {formatDate(unit.acceptedAt)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Container Level:</strong> {unitLevelToName(unit.level)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Medicine:</strong> {getMedicineName(unit.metadata)} ({unit.quantity} tablets)</p>
+                            <div style={{ marginTop: '10px', marginBottom: '6px' }}>
+                              <button
+                                type="button"
+                                className={styles.secondaryButton}
+                                style={{ padding: '6px 14px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
+                                onClick={() => void openQrModal(unit)}
+                              >
+                                📱 View Public QR Code
+                              </button>
+                            </div>
 
                             {/* Unit History */}
                             <div style={{ marginTop: '12px', backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px' }}>
@@ -1625,7 +1660,110 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         </div>
       )}
 
-      {modalUnit && (
+      
+        {qrModalUnit && (
+          <div className={styles.modalBackdrop} onClick={() => setQrModalUnit(null)}>
+            <div
+              className={styles.modalContent}
+              style={{ maxWidth: '420px', textAlign: 'center', padding: '24px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#0d9488', letterSpacing: '0.05em' }}>
+                  Public Verification QR
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQrModalUnit(null)}
+                  style={{ border: 'none', background: 'transparent', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <h3 style={{ margin: '0 0 4px 0', fontSize: '19px', fontWeight: 700, color: '#0f172a' }}>
+                {getMedicineName(qrModalUnit.metadata)}
+              </h3>
+              <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#64748b' }}>
+                Unit #{qrModalUnit.id} · {qrModalUnit.quantity} tablets in stock
+              </p>
+
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  padding: '16px',
+                  borderRadius: '16px',
+                  display: 'inline-block',
+                  boxShadow: '0 4px 12px rgba(15,23,42,0.08)',
+                  border: '1px solid #e2e8f0',
+                  marginBottom: '18px',
+                }}
+              >
+                {qrDataUrl ? (
+                  <img
+                    src={qrDataUrl}
+                    alt={`QR Code for Unit #${qrModalUnit.id}`}
+                    style={{ width: '220px', height: '220px', display: 'block' }}
+                  />
+                ) : (
+                  <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+                    Generating QR code...
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    style={{ flex: 1, padding: '10px' }}
+                    onClick={() => {
+                      if (!qrDataUrl) return;
+                      const a = document.createElement("a");
+                      a.href = qrDataUrl;
+                      a.download = `pharmatree-unit-${qrModalUnit.id}-qr.png`;
+                      a.click();
+                    }}
+                  >
+                    ⬇ Download PNG
+                  </button>
+
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    style={{ flex: 1, padding: '10px' }}
+                    onClick={async () => {
+                      const origin = typeof window !== "undefined" ? window.location.origin : "";
+                      const link = `${origin}/verify?unitId=${qrModalUnit.id}`;
+                      try {
+                        await navigator.clipboard.writeText(link);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 2500);
+                      } catch {
+                        // clipboard fallback
+                      }
+                    }}
+                  >
+                    {copiedLink ? "✓ Copied!" : "📋 Copy Link"}
+                  </button>
+                </div>
+
+                <a
+                  href={`/verify?unitId=${qrModalUnit.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.secondaryButton}
+                  style={{ display: 'block', textDecoration: 'none', padding: '10px', textAlign: 'center' }}
+                >
+                  Open Public Verification Page ↗
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {modalUnit && (
         <div className={styles.unitModalBackdrop} onClick={() => setModalUnit(null)}>
           <div className={styles.unitModalContent} onClick={(e) => e.stopPropagation()}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
