@@ -1769,10 +1769,37 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
       
         {qrModalUnit && (
-          <div className={styles.modalBackdrop} onClick={() => setQrModalUnit(null)}>
+          <div
+            className={styles.unitModalBackdrop}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: "rgba(15, 23, 42, 0.8)",
+              backdropFilter: "blur(8px)",
+              WebkitBackdropFilter: "blur(8px)",
+              zIndex: 99999,
+              padding: "16px",
+            }}
+            onClick={() => setQrModalUnit(null)}
+          >
             <div
-              className={styles.modalContent}
-              style={{ maxWidth: '420px', textAlign: 'center', padding: '24px' }}
+              className={styles.unitModalContent}
+              style={{
+                maxWidth: "440px",
+                width: "100%",
+                textAlign: "center",
+                padding: "24px",
+                backgroundColor: "#ffffff",
+                borderRadius: "16px",
+                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+                border: "1px solid #e2e8f0",
+              }}
               onClick={(e) => e.stopPropagation()}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
