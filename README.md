@@ -100,6 +100,12 @@ as `1.1`; handler views use wallet-local numbering such as `1` and `2`.
 - Over-quantity transfer and sale validation.
 - Whole-unit sale operation with transfer prevention after sale.
 
+### Public QR verification & provenance audit
+
+- Interactive QR modal in inventory cards with PNG download and direct verification link sharing.
+- Dedicated consumer portal at `/verify` enabling wallet-less on-chain provenance inspection.
+- Real-time authenticity badge, manufacturer verification, batch details, and immutable custody audit trail.
+
 ### Administration
 
 - Admin-controlled manufacturer and handler role assignment.
