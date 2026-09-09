@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile smart contracts
+        run: npx hardhat compile
+
+      - name: Run test suite
+        run: npx hardhat test
+
+      - name: Build Next.js production bundle
+        run: npm run build
+        env:
+          NEXT_PUBLIC_PHARMA_TREE_CONTRACT: "0xd11913E626e6A0cF3b551E8f0360FDE60Ef47235"
+          NEXT_PUBLIC_CHAIN_ID: "11155111"
+          NEXT_PUBLIC_DEPLOYMENT_BLOCK: "11670430"
+          NEXT_PUBLIC_RPC_URL: "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2"

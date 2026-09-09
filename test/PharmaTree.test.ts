@@ -91,6 +91,8 @@ describe("PharmaTree Smart Contract", function () {
       expect(received.currentOwner).to.equal(distributor.address);
       expect(received.quantity).to.equal(40);
       expect(received.status).to.equal(Status.Active);
+      expect(source.metadata).to.equal("Paracetamol, 60 tablets");
+      expect(split.metadata).to.equal("Paracetamol, 40 tablets");
     });
 
     it("Should allow packing child units under a parent unit", async function () {
@@ -206,6 +208,71 @@ describe("PharmaTree Smart Contract", function () {
       await expect(
         pharmaTree.connect(pharmacy).initiateTransfer(1, distributor.address)
       ).to.be.revertedWith("Unit not active");
+    });
+  });
+
+  describe("Partial Sales (sellQuantity) & Dynamic Metadata", function () {
+    beforeEach(async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.Batch,
+        "Ibuprofen 400mg, 100 tablets",
+        100
+      );
+    });
+
+    it("Should allow the owner to sell a partial quantity and split inventory", async function () {
+      await expect(pharmaTree.connect(manufacturer).sellQuantity(1, 30))
+        .to.emit(pharmaTree, "UnitSold")
+        .withArgs(2, manufacturer.address);
+
+      const parentUnit = await pharmaTree.getUnitDetails(1);
+      const soldUnit = await pharmaTree.getUnitDetails(2);
+
+      expect(parentUnit.quantity).to.equal(70);
+      expect(parentUnit.status).to.equal(Status.Active);
+      expect(parentUnit.metadata).to.equal("Ibuprofen 400mg, 70 tablets");
+
+      expect(soldUnit.quantity).to.equal(30);
+      expect(soldUnit.status).to.equal(Status.Sold);
+      expect(soldUnit.parentId).to.equal(1);
+      expect(soldUnit.rootId).to.equal(1);
+      expect(soldUnit.metadata).to.equal("Ibuprofen 400mg, 30 tablets");
+    });
+
+    it("Should mark the entire unit as sold if selling the full available quantity", async function () {
+      await expect(pharmaTree.connect(manufacturer).sellQuantity(1, 100))
+        .to.emit(pharmaTree, "UnitSold")
+        .withArgs(1, manufacturer.address);
+
+      const unit = await pharmaTree.getUnitDetails(1);
+      expect(unit.quantity).to.equal(100);
+      expect(unit.status).to.equal(Status.Sold);
+    });
+
+    it("Should revert if selling 0 quantity", async function () {
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 0)
+      ).to.be.revertedWith("Invalid sale quantity");
+    });
+
+    it("Should revert if selling more than available quantity", async function () {
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 101)
+      ).to.be.revertedWith("Invalid sale quantity");
+    });
+
+    it("Should prevent non-owners from selling units", async function () {
+      await expect(
+        pharmaTree.connect(unauthorized).sellQuantity(1, 20)
+      ).to.be.revertedWith("Not the current owner");
+    });
+
+    it("Should prevent selling an already sold unit", async function () {
+      await pharmaTree.connect(manufacturer).sellQuantity(1, 100);
+
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 1)
+      ).to.be.revertedWith("Unit is not active");
     });
   });
 });

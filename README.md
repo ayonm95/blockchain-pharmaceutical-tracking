@@ -2,6 +2,7 @@
 
 ## Blockchain-based pharmaceutical supply-chain verification
 
+[![CI](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/actions/workflows/ci.yml/badge.svg)](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f0c94a.svg)](LICENSE)
 [![Next.js](https://img.shields.io/badge/Next.js-16.3.1-111827.svg?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-363636.svg?logo=solidity)](https://soliditylang.org/)
