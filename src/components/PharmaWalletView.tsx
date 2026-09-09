@@ -58,7 +58,7 @@ type ActionPopup = {
 };
 
 type EthereumProvider = {
-  request: (args: { method: string }) => Promise<unknown>;
+  request: (args: { method: string; params?: unknown[] | Record<string, unknown> }) => Promise<unknown>;
   on: (event: string, listener: (accounts: string[]) => void) => void;
   removeListener: (event: string, listener: (accounts: string[]) => void) => void;
 };
@@ -256,15 +256,15 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     }
   }
 
-  const getEthereumProvider = () => {
+  const getEthereumProvider = (): EthereumProvider | null => {
     if (typeof window === "undefined") return null;
-    const anyWin = window as any;
+    const anyWin = window as unknown as WindowWithEthereum & { ethereum?: { providers?: Array<{ isMetaMask?: boolean }> } };
     if (!anyWin.ethereum) return null;
     if (Array.isArray(anyWin.ethereum.providers)) {
-      const mm = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
-      if (mm) return mm;
+      const mm = anyWin.ethereum.providers.find((p) => Boolean(p?.isMetaMask));
+      if (mm) return mm as unknown as EthereumProvider;
     }
-    return anyWin.ethereum;
+    return anyWin.ethereum as EthereumProvider;
   };
 
   async function connectWallet({ silent = false }: { silent?: boolean } = {}) {
@@ -311,7 +311,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
             params: [{ chainId: `0x${PHARMA_TREE_CHAIN_ID.toString(16)}` }],
           });
           network = await browserProvider.getNetwork();
-        } catch (switchError: any) {
+        } catch (switchError: unknown) {
           console.warn("Chain switch request failed", switchError);
           const msg = `Please switch MetaMask to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
           setStatus(msg);
@@ -344,16 +344,17 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       } catch (loadErr) {
         console.error("Error loading wallet data from RPC:", loadErr);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Wallet connection error:", error);
       if (!silent) {
         let message = "Wallet connection failed.";
-        if (error?.code === 4001) {
+        const err = error as { code?: number; message?: string };
+      if (err?.code === 4001) {
           message = "Connection rejected in MetaMask.";
-        } else if (error?.code === -32002) {
+        } else if (err?.code === -32002) {
           message = "Connection request already open in MetaMask. Please open your extension popup.";
-        } else if (error?.message) {
-          message = error.message.slice(0, 100);
+        } else if (err?.message) {
+          message = err.message.slice(0, 100);
         }
         setStatus(message);
         notifyAction(message, "error");
@@ -414,7 +415,8 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
   useEffect(() => {
     if (!isAdmin && role.manufacturer && roleType !== "handler") {
-      setRoleType("handler");
+      const timer = setTimeout(() => setRoleType("handler"), 0);
+      return () => clearTimeout(timer);
     }
   }, [isAdmin, role.manufacturer, roleType]);
 
@@ -732,7 +734,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
           } else {
             tx = await contract.markAsSold(unitId);
           }
-        } catch (sellErr: any) {
+        } catch (sellErr: unknown) {
           console.warn("sellQuantity call failed, falling back to markAsSold:", sellErr);
           try {
             tx = await contract.markAsSold(unitId);

@@ -46,10 +46,18 @@ function VerifyContent() {
   useEffect(() => {
     const id = searchParams.get("unitId");
     if (id) {
-      setInputUnitId(id);
-      setActiveUnitId(id);
+      const timer = setTimeout(() => {
+        setInputUnitId(id);
+        setActiveUnitId(id);
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [searchParams]);
+
+  const formatAddress = (addr?: string) => {
+    if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
 
   useEffect(() => {
     if (!activeUnitId) return;
@@ -193,11 +201,12 @@ function VerifyContent() {
         if (!cancelled) {
           setTimeline(events);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!cancelled) {
           console.error("Verification query error:", err);
+          const errorMsg = err instanceof Error ? err.message : String(err);
           setError(
-            err.message?.includes("Unit does not exist")
+            errorMsg.includes("Unit does not exist")
               ? `Unit #${activeUnitId} was not found on the blockchain.`
               : "Could not retrieve unit details. Please check the Unit ID or your network connection."
           );
@@ -213,11 +222,6 @@ function VerifyContent() {
       cancelled = true;
     };
   }, [activeUnitId]);
-
-  const formatAddress = (addr?: string) => {
-    if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
 
   const formatDate = (timestamp?: number) => {
     if (!timestamp) return "Recorded on-chain";
