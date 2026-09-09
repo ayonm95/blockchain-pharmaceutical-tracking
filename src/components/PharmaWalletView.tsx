@@ -143,46 +143,57 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     if (activityRequest) return activityRequest;
 
     activityRequest = (async () => {
-      const activity: Record<string, UnitActivity> = {};
-      const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
-      const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "0");
-      const fromBlock = configuredStart > 0
-        ? configuredStart
-        : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);
-      const logs: ethers.Log[] = [];
-      for (let start = fromBlock; start <= latestBlock; start += EVENT_QUERY_WINDOW) {
-        const end = Math.min(start + EVENT_QUERY_WINDOW - 1, latestBlock);
-        logs.push(...await withRpcRetry(() => readonlyProvider.getLogs({
-          address: PHARMA_TREE_CONTRACT,
-          fromBlock: start,
-          toBlock: end,
-        })));
-      }
-      const blockTimes = new Map<number, number>();
-      for (const rawLog of logs) {
-        const parsed = contract.interface.parseLog(rawLog);
-        if (!parsed) continue;
-        const log = { ...rawLog, args: parsed.args, fragment: parsed.fragment };
-        if (!blockTimes.has(log.blockNumber)) {
-          const block = await withRpcRetry(() => readonlyProvider.getBlock(log.blockNumber));
-          if (block) blockTimes.set(log.blockNumber, Number(block.timestamp));
+      try {
+        const activity: Record<string, UnitActivity> = {};
+        const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
+        const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "0");
+        const fromBlock = configuredStart > 0
+          ? configuredStart
+          : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);
+        const logs: ethers.Log[] = [];
+        for (let start = fromBlock; start <= latestBlock; start += EVENT_QUERY_WINDOW) {
+          const end = Math.min(start + EVENT_QUERY_WINDOW - 1, latestBlock);
+          logs.push(...await withRpcRetry(() => readonlyProvider.getLogs({
+            address: PHARMA_TREE_CONTRACT,
+            fromBlock: start,
+            toBlock: end,
+          })));
         }
-        if (!log.args) continue;
-        const id = String(log.args[0]);
-        const current = activity[id] ?? {};
-        const timestamp = blockTimes.get(log.blockNumber);
-        if (timestamp === undefined) continue;
-        if (log.fragment?.name === "UnitCreated") {
-          current.createdAt = timestamp;
+        const blockTimes = new Map<number, number>();
+        for (const rawLog of logs) {
+          try {
+            const parsed = contract.interface.parseLog(rawLog);
+            if (!parsed) continue;
+            const log = { ...rawLog, args: parsed.args, fragment: parsed.fragment };
+            if (!blockTimes.has(log.blockNumber)) {
+              try {
+                const block = await withRpcRetry(() => readonlyProvider.getBlock(log.blockNumber));
+                if (block) blockTimes.set(log.blockNumber, Number(block.timestamp));
+              } catch {
+                blockTimes.set(log.blockNumber, Math.floor(Date.now() / 1000));
+              }
+            }
+            if (!log.args) continue;
+            const id = String(log.args[0]);
+            const current = activity[id] ?? {};
+            const timestamp = blockTimes.get(log.blockNumber);
+            if (timestamp === undefined) continue;
+            if (log.fragment?.name === "UnitCreated") current.createdAt = timestamp;
+            if (log.fragment?.name === "TransferInitiated") current.initiatedAt = timestamp;
+            if (log.fragment?.name === "TransferCompleted") current.acceptedAt = timestamp;
+            if (log.fragment?.name === "TransferRejected") current.rejectedAt = timestamp;
+            if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
+            activity[id] = current;
+          } catch {
+            // Skip unparseable log entry
+          }
         }
-        if (log.fragment?.name === "TransferInitiated") current.initiatedAt = timestamp;
-        if (log.fragment?.name === "TransferCompleted") current.acceptedAt = timestamp;
-        if (log.fragment?.name === "TransferRejected") current.rejectedAt = timestamp;
-        if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
-        activity[id] = current;
+        activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: activity };
+        return activity;
+      } catch (err) {
+        console.warn("fetchUnitActivity failed:", err);
+        return {};
       }
-      activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: activity };
-      return activity;
     })();
 
     try {
@@ -240,34 +251,77 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     }
   }
 
+  const getEthereumProvider = () => {
+    if (typeof window === "undefined") return null;
+    const anyWin = window as any;
+    if (!anyWin.ethereum) return null;
+    if (Array.isArray(anyWin.ethereum.providers)) {
+      const mm = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
+      if (mm) return mm;
+    }
+    return anyWin.ethereum;
+  };
+
   async function connectWallet({ silent = false }: { silent?: boolean } = {}) {
-    if (typeof window === "undefined" || !(window as WindowWithEthereum).ethereum) {
-      setStatus("MetaMask is required");
+    const provider = getEthereumProvider();
+    if (!provider) {
+      if (!silent) {
+        const msg = "MetaMask is not detected. Please install or enable MetaMask.";
+        setStatus(msg);
+        notifyAction(msg, "error");
+      }
       return;
     }
 
     try {
       setLoading(true);
-      const provider = (window as WindowWithEthereum).ethereum;
-      if (!provider) throw new Error("MetaMask provider is unavailable.");
+
+      let walletAddress: string | null = null;
       const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
-      const walletAddress = accounts && accounts.length > 0
-        ? accounts[0]
-        : ((await provider.request({ method: "eth_requestAccounts" })) as string[])[0];
+      if (accounts && accounts.length > 0) {
+        walletAddress = accounts[0];
+      } else if (!silent) {
+        const requested = (await provider.request({ method: "eth_requestAccounts" })) as string[];
+        if (requested && requested.length > 0) {
+          walletAddress = requested[0];
+        }
+      }
 
       if (!walletAddress) {
         if (!silent) {
-          setStatus("No wallet account available in MetaMask.");
+          const msg = "No wallet account selected in MetaMask. Please unlock MetaMask.";
+          setStatus(msg);
+          notifyAction(msg, "error");
         }
         return;
       }
 
       const browserProvider = new ethers.BrowserProvider(provider);
-      const network = await browserProvider.getNetwork();
+      let network = await browserProvider.getNetwork();
+
       if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
-        setStatus(`Switch MetaMask to chain ${PHARMA_TREE_CHAIN_ID.toString()} before using PharmaTree.`);
+        try {
+          await provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: `0x${PHARMA_TREE_CHAIN_ID.toString(16)}` }],
+          });
+          network = await browserProvider.getNetwork();
+        } catch (switchError: any) {
+          console.warn("Chain switch request failed", switchError);
+          const msg = `Please switch MetaMask to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
+          setStatus(msg);
+          if (!silent) notifyAction(msg, "error");
+          return;
+        }
+      }
+
+      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
+        const msg = `Switch MetaMask to chain ${PHARMA_TREE_CHAIN_ID.toString()} before using PharmaTree.`;
+        setStatus(msg);
+        if (!silent) notifyAction(msg, "error");
         return;
       }
+
       const signer = await browserProvider.getSigner(walletAddress);
       const signerContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
 
@@ -275,14 +329,27 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       setAccount(walletAddress);
       setConnected(true);
       localStorage.setItem(WALLET_STORAGE_KEY, walletAddress);
-      await loadWalletData(walletAddress, signerContract);
+
       const message = `Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}.`;
       setStatus(message);
       if (!silent) notifyAction(message);
-    } catch (error) {
-      console.error(error);
+
+      try {
+        await loadWalletData(walletAddress, signerContract);
+      } catch (loadErr) {
+        console.error("Error loading wallet data from RPC:", loadErr);
+      }
+    } catch (error: any) {
+      console.error("Wallet connection error:", error);
       if (!silent) {
-        const message = "Wallet connection failed. Open MetaMask and approve the connection.";
+        let message = "Wallet connection failed.";
+        if (error?.code === 4001) {
+          message = "Connection rejected in MetaMask.";
+        } else if (error?.code === -32002) {
+          message = "Connection request already open in MetaMask. Please open your extension popup.";
+        } else if (error?.message) {
+          message = error.message.slice(0, 100);
+        }
         setStatus(message);
         notifyAction(message, "error");
       }
@@ -292,21 +359,16 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   }
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (typeof window === "undefined") return;
 
-    const provider = (window as WindowWithEthereum).ethereum;
+    const provider = getEthereumProvider();
+    if (!provider) return;
+
     const autoConnect = async () => {
       try {
-        const accounts = provider ? (await provider.request({ method: "eth_accounts" })) as string[] : [];
+        const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
         if (accounts && accounts.length > 0) {
           await connectWallet({ silent: true });
-        } else {
-          const savedWallet = window.localStorage.getItem(WALLET_STORAGE_KEY);
-          if (savedWallet) {
-            await connectWallet({ silent: true });
-          }
         }
       } catch (error) {
         console.warn("Auto-connect failed", error);
@@ -314,10 +376,6 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     };
 
     void autoConnect();
-
-    if (!provider) {
-      return;
-    }
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (!accounts || accounts.length === 0) {
@@ -337,15 +395,20 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       void connectWallet({ silent: true });
     };
 
+    const handleChainChanged = () => {
+      window.location.reload();
+    };
+
     provider.on("accountsChanged", handleAccountsChanged);
-    return () => provider.removeListener("accountsChanged", handleAccountsChanged);
-    // Wallet listeners are registered once and use the current provider event callback.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    provider.on("chainChanged", handleChainChanged);
+    return () => {
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+      provider.removeListener?.("chainChanged", handleChainChanged);
+    };
   }, []);
 
   useEffect(() => {
     if (!isAdmin && role.manufacturer && roleType !== "handler") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRoleType("handler");
     }
   }, [isAdmin, role.manufacturer, roleType]);
@@ -658,7 +721,20 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
           failAction(`Sale quantity cannot exceed the ${availableQuantity}-unit stock available.`);
           return;
         }
-        tx = await contract.markAsSold(unitId);
+        try {
+          if (typeof contract.sellQuantity === "function") {
+            tx = await contract.sellQuantity(unitId, saleQuantity);
+          } else {
+            tx = await contract.markAsSold(unitId);
+          }
+        } catch (sellErr: any) {
+          console.warn("sellQuantity call failed, falling back to markAsSold:", sellErr);
+          try {
+            tx = await contract.markAsSold(unitId);
+          } catch {
+            throw sellErr;
+          }
+        }
       }
 
       await tx.wait();
@@ -689,6 +765,56 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
+  const getMedicineName = (metadata?: string) => {
+    if (!metadata) return "Medicine";
+    return metadata.split(",")[0].trim() || metadata;
+  };
+
+  // Helper to calculate status & statistics for a partition branch
+  const getPartitionBranchStats = (partitionUnit: UnitRecord, allUnits: UnitRecord[]) => {
+    const branchUnits = [partitionUnit];
+    const queue = [partitionUnit.id];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const kids = allUnits.filter((u) => u.parentId === currentId && u.id !== currentId);
+      for (const kid of kids) {
+        branchUnits.push(kid);
+        queue.push(kid.id);
+      }
+    }
+
+    const soldUnits = branchUnits.filter((u) => u.status === 2);
+    const soldQty = soldUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const activeUnits = branchUnits.filter((u) => u.status === 0);
+    const activeQty = activeUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const pendingUnits = branchUnits.filter((u) => u.status === 1);
+    const pendingQty = pendingUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const totalBranchQty = branchUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+
+    let statusText = "Transferred";
+    let statusBadgeClass = styles.statusTransferred;
+
+    if (soldQty === totalBranchQty && totalBranchQty > 0) {
+      statusText = "Sold";
+      statusBadgeClass = styles.statusSold;
+    } else if (soldQty > 0) {
+      statusText = "Partially sold";
+      statusBadgeClass = styles.statusPartialTransfer;
+    } else if (pendingQty > 0) {
+      statusText = "Pending transfer";
+      statusBadgeClass = styles.statusPending;
+    }
+
+    return {
+      soldQty,
+      activeQty,
+      pendingQty,
+      totalBranchQty,
+      statusText,
+      statusBadgeClass,
+    };
+  };
+
   const createdRootSummaries = useMemo(() => {
     const wallet = account.toLowerCase();
     return units
@@ -700,14 +826,15 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         const manufacturerQuantity = lineage
           .filter((unit) => unit.currentOwner.toLowerCase() === wallet && unit.status === 0)
           .reduce((sum, unit) => sum + Number(unit.quantity), 0);
-        const partitions = descendants.filter((unit) =>
+        const directDescendants = descendants.filter((unit) => unit.parentId === root.id);
+        const partitions = directDescendants.length > 0 ? directDescendants : descendants.filter((unit) =>
           unit.manufacturer.toLowerCase() === wallet ||
           unit.currentOwner.toLowerCase() === wallet ||
           unit.pendingReceiver.toLowerCase() === wallet
         );
         return { root, partitions, totalQuantity, manufacturerQuantity };
       })
-      .filter((summary) => summary.manufacturerQuantity > 0);
+      .filter((summary) => summary.totalQuantity > 0);
   }, [account, units]);
 
   const ownedUnits = useMemo(
@@ -782,6 +909,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   }, [account, units]);
 
   const localUnitId = (unit: UnitRecord) => walletLocalIds.get(unit.id) ?? unit.displayId;
+  const hasSoldChildren = (unit: UnitRecord) =>
+    units.some((k) => k.parentId === unit.id && k.status === 2);
+
   const displayStatus = (unit: UnitRecord) =>
     unit.status === 2
       ? "Sold"
@@ -790,7 +920,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         : unit.status === 3
           ? "Rejected"
           : unit.currentOwner.toLowerCase() === account.toLowerCase()
-            ? "In stock"
+            ? (hasSoldChildren(unit) ? "Partially sold" : "In stock")
             : "Transferred";
   const statusClass = (unit: UnitRecord) =>
     unit.status === 2
@@ -800,7 +930,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         : unit.status === 3
           ? styles.statusRejected
           : unit.currentOwner.toLowerCase() === account.toLowerCase()
-            ? styles.statusInStock
+            ? (hasSoldChildren(unit) ? styles.statusPartialTransfer : styles.statusInStock)
             : styles.statusTransferred;
 
   useEffect(() => {
@@ -843,7 +973,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
         <div className={styles.headerActions}>
           <button className={styles.primaryButton} onClick={() => void connectWallet()} disabled={loading}>
-            {loading ? "Connecting..." : connected ? "Reconnect wallet" : "Reconnect wallet"}
+            {loading ? "Connecting..." : connected ? (account ? `${account.slice(0, 6)}...${account.slice(-4)}` : "Connected") : "Connect wallet"}
           </button>
           <button type="button" className={styles.notifyButton} aria-label="Pending transfers" onClick={() => router.push('/transfers')}>
             <span>🔔</span>
@@ -984,12 +1114,18 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                             {partitions.length > 0 && rootExpanded && (
                               <div className={styles.partitionList}>
                                 {partitions.map((partition) => {
+                                  const stats = getPartitionBranchStats(partition, units);
                                   return (
                                     <div className={styles.partitionTile} key={partition.id}>
                                       <div className={styles.partitionRow}>
                                         <span><strong>#{partition.displayId}</strong></span>
-                                        <span>Qty {partition.quantity}</span>
-                                        <span className={`${styles.statusBadge} ${statusClass(partition)}`}>{displayStatus(partition)}</span>
+                                        <span>
+                                          Qty {stats.activeQty > 0 ? stats.activeQty : 0}
+                                          {stats.soldQty > 0 ? ` (${stats.soldQty}/${stats.totalBranchQty} Sold)` : ""}
+                                        </span>
+                                        <span className={`${styles.statusBadge} ${stats.statusBadgeClass}`}>
+                                          {stats.statusText}
+                                        </span>
                                       </div>
                                     </div>
                                   );
@@ -1412,7 +1548,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                             <p style={{ margin: 0, color: '#334155' }}><strong>Created:</strong> {formatDate(unit.createdAt)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Accepted:</strong> {formatDate(unit.acceptedAt)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Container Level:</strong> {unitLevelToName(unit.level)}</p>
-                            <p style={{ margin: 0, color: '#334155' }}><strong>Metadata:</strong> {unit.metadata}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Medicine:</strong> {getMedicineName(unit.metadata)} ({unit.quantity} tablets)</p>
 
                             {/* Unit History */}
                             <div style={{ marginTop: '12px', backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px' }}>
@@ -1506,7 +1642,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
               <p><strong>Created:</strong> {formatDate(modalUnit.createdAt)}</p>
               <p><strong>Accepted:</strong> {formatDate(modalUnit.acceptedAt)}</p>
               <p><strong>Status:</strong> {displayStatus(modalUnit)}</p>
-              <p><strong>Metadata:</strong> {modalUnit.metadata}</p>
+              <p><strong>Medicine Details:</strong> {getMedicineName(modalUnit.metadata)} ({modalUnit.quantity} tablets)</p>
 
               {modalUnit.status === 1 && modalUnit.pendingReceiver.toLowerCase() === account.toLowerCase() && (
                 <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.19;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract PharmaTree is AccessControl {
     bytes32 public constant MANUFACTURER_ROLE = keccak256("MANUFACTURER_ROLE");
@@ -135,6 +136,22 @@ contract PharmaTree is AccessControl {
         return _initiateTransfer(_id, _receiver, _quantity);
     }
 
+    function _formatMetadata(string memory _originalMetadata, uint256 _newQuantity) internal pure returns (string memory) {
+        bytes memory strBytes = bytes(_originalMetadata);
+        uint256 commaIndex = strBytes.length;
+        for (uint256 i = 0; i < strBytes.length; i++) {
+            if (strBytes[i] == ",") {
+                commaIndex = i;
+                break;
+            }
+        }
+        bytes memory baseNameBytes = new bytes(commaIndex);
+        for (uint256 j = 0; j < commaIndex; j++) {
+            baseNameBytes[j] = strBytes[j];
+        }
+        return string.concat(string(baseNameBytes), ", ", Strings.toString(_newQuantity), " tablets");
+    }
+
     function _initiateTransfer(uint256 _id, address _receiver, uint256 _quantity) internal onlyCurrentOwner(_id) returns (uint256) {
         require(units[_id].status == Status.Active, "Unit not active");
         require(hasRole(MANUFACTURER_ROLE, _receiver) || hasRole(HANDLER_ROLE, _receiver), "Receiver is not authorized");
@@ -142,14 +159,19 @@ contract PharmaTree is AccessControl {
 
         uint256 transferId = _id;
         if (_quantity < units[_id].quantity) {
-            units[_id].quantity -= _quantity;
+            uint256 remainingQuantity = units[_id].quantity - _quantity;
+            string memory baseMeta = units[_id].metadata;
+            units[_id].quantity = remainingQuantity;
+            units[_id].metadata = _formatMetadata(baseMeta, remainingQuantity);
+
+            string memory childMetadata = _formatMetadata(baseMeta, _quantity);
             transferId = _createUnit(
                 _id,
                 units[_id].rootId == 0 ? _id : units[_id].rootId,
                 units[_id].level,
                 units[_id].manufacturer,
                 msg.sender,
-                units[_id].metadata,
+                childMetadata,
                 _quantity
             );
             children[_id].push(transferId);
@@ -184,13 +206,39 @@ contract PharmaTree is AccessControl {
         emit TransferRejected(_id, units[_id].currentOwner, msg.sender);
     }
 
-    function markAsSold(uint256 _id) external onlyCurrentOwner(_id) {
+    function sellQuantity(uint256 _id, uint256 _quantity) public onlyCurrentOwner(_id) returns (uint256) {
         require(units[_id].status == Status.Active, "Unit is not active");
+        require(_quantity > 0 && _quantity <= units[_id].quantity, "Invalid sale quantity");
 
-        units[_id].status = Status.Sold;
-        units[_id].pendingReceiver = address(0);
+        uint256 soldUnitId = _id;
+        if (_quantity < units[_id].quantity) {
+            uint256 remainingQuantity = units[_id].quantity - _quantity;
+            string memory baseMeta = units[_id].metadata;
+            units[_id].quantity = remainingQuantity;
+            units[_id].metadata = _formatMetadata(baseMeta, remainingQuantity);
 
-        emit UnitSold(_id, msg.sender);
+            string memory soldMetadata = _formatMetadata(baseMeta, _quantity);
+            soldUnitId = _createUnit(
+                _id,
+                units[_id].rootId == 0 ? _id : units[_id].rootId,
+                units[_id].level,
+                units[_id].manufacturer,
+                msg.sender,
+                soldMetadata,
+                _quantity
+            );
+            children[_id].push(soldUnitId);
+        }
+
+        units[soldUnitId].status = Status.Sold;
+        units[soldUnitId].pendingReceiver = address(0);
+
+        emit UnitSold(soldUnitId, msg.sender);
+        return soldUnitId;
+    }
+
+    function markAsSold(uint256 _id) external onlyCurrentOwner(_id) {
+        sellQuantity(_id, units[_id].quantity);
     }
 
     function getChildren(uint256 _parentId) external view returns (uint256[] memory) {

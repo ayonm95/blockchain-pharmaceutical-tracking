@@ -193,10 +193,18 @@ flowchart LR
 ```mermaid
 flowchart LR
     Stock[Active stock] --> Validate[Validate unit and quantity]
-    Validate --> Sell[markAsSold]
-    Sell --> Sold[Sold]
+    Validate --> Mode{Sale type}
+    Mode -->|Full stock| SellFull[markAsSold: marks entire unit as Sold]
+    Mode -->|Partial stock| SellPart[sellQuantity: splits stock, updates metadata]
+    SellFull --> Sold[Sold]
+    SellPart --> Sold
     Sold --> Block[Future transfers blocked]
 ```
+
+PharmaTree supports both full and partial quantity sales:
+1. **Partial sales (`sellQuantity`)**: The seller can sell any integer quantity $\le$ available stock. The contract creates a new child unit for the sold portion marked as `Sold`, decrements the seller's remaining inventory, and dynamically synchronizes metadata on-chain for both units (e.g. `Paracetamol, 30 tablets`).
+2. **Full sales (`markAsSold`)**: Direct sell method that marks the entire unit quantity as `Sold`.
+3. The inventory and partition views track partial sales with a dedicated `Partially sold` status badge and display exact sold/active quantity tallies.
 
 ### Create medicine
 

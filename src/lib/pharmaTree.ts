@@ -13,6 +13,7 @@ export const PHARMA_TREE_ABI = [
   "function acceptTransfer(uint256 _id)",
   "function rejectTransfer(uint256 _id)",
   "function markAsSold(uint256 _id)",
+  "function sellQuantity(uint256 _id, uint256 _quantity) returns (uint256)",
   "function getChildren(uint256 _parentId) view returns (uint256[])",
   "function getUnitDetails(uint256 _id) view returns (tuple(uint256 parentId, uint256 rootId, uint8 level, address manufacturer, address currentOwner, address pendingReceiver, uint8 status, uint256 quantity, string metadata))",
 
