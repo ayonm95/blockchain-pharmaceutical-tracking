@@ -46,10 +46,10 @@ async function main() {
   }
 
   const envPaths = [
-    path.resolve("/Users/ayon/Downloads/all projects/blockchain based tracking befotre changes after git publih /backend/.env"),
-    path.resolve("/Users/ayon/Downloads/all projects/blockchain based tracking befotre changes after git publih /frontend/.env.local"),
-    path.resolve("/Users/ayon/Downloads/all projects/blockchain_tracking/.env"),
-    path.resolve("/Users/ayon/Downloads/all projects/blockchain_tracking/.env.local"),
+    path.resolve(__dirname, "../.env"),
+    path.resolve(__dirname, "../../frontend/.env.local"),
+    path.resolve(__dirname, "../../../blockchain_tracking/.env"),
+    path.resolve(__dirname, "../../../blockchain_tracking/.env.local"),
   ];
 
   for (const envPath of envPaths) {
