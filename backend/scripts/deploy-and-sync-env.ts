@@ -48,8 +48,6 @@ async function main() {
   const envPaths = [
     path.resolve(__dirname, "../.env"),
     path.resolve(__dirname, "../../frontend/.env.local"),
-    path.resolve(__dirname, "../../../blockchain_tracking/.env"),
-    path.resolve(__dirname, "../../../blockchain_tracking/.env.local"),
   ];
 
   for (const envPath of envPaths) {
