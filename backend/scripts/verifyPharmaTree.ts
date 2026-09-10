@@ -20,7 +20,7 @@ async function main() {
 
   const rootTx = await pharmaTree
     .connect(manufacturer)
-    .createRootUnit(0, "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbz6y");
+    .createRootUnit(0, "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbz6y", 1);
   await rootTx.wait();
 
   const countBefore = await pharmaTree.unitCounter();

@@ -61,8 +61,9 @@ async function main() {
 
   const beforeCounter = Number(await manufacturerContract.unitCounter());
   const metadata = `ipfs://demo-medicine-sepolia-${Date.now()}`;
+  const quantity = Number(process.env.MEDICINE_QUANTITY ?? "1");
 
-  const createdUnit = await manufacturerContract.createRootUnit(0, metadata);
+  const createdUnit = await manufacturerContract.createRootUnit(0, metadata, quantity);
   await createdUnit.wait();
   const unitId = Number(await manufacturerContract.unitCounter());
   console.log(`Root unit created as Unit #${unitId} with metadata ${metadata}`);

@@ -32,9 +32,11 @@ async function main() {
 
   const counterBefore = Number(await contract.unitCounter());
   const nextId = counterBefore + 1;
+  const quantity = Number(process.env.MEDICINE_QUANTITY ?? "1");
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("MEDICINE_QUANTITY must be a positive integer");
 
   const metadata = `ipfs://demo-medicine-sepolia-${Date.now()}`;
-  const tx = await contract.createRootUnit(0, metadata);
+  const tx = await contract.createRootUnit(0, metadata, quantity);
   await tx.wait();
 
   const counterAfter = Number(await contract.unitCounter());

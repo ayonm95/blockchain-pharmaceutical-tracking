@@ -1,16 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ethers } from "ethers";
+import QRCode from "qrcode";
 import styles from "@/app/page.module.css";
-import { PHARMA_TREE_ABI, PHARMA_TREE_CONTRACT, unitLevelToName, unitStatusToName } from "@/lib/pharmaTree";
+import { PHARMA_TREE_ABI, PHARMA_TREE_CHAIN_ID, PHARMA_TREE_CONTRACT, unitLevelToName } from "@/lib/pharmaTree";
 
 type ViewMode = "overview" | "transfers" | "inventory" | "create" | "admin";
 
 type UnitRecord = {
   id: string;
+  displayId: string;
   parentId: string;
   rootId: string;
   level: number;
@@ -21,7 +23,16 @@ type UnitRecord = {
   metadata: string;
   quantity: string;
   ownerLabel: string;
+  createdAt?: number;
+  initiatedAt?: number;
+  acceptedAt?: number;
+  rejectedAt?: number;
+  soldAt?: number;
 };
+const formatDate = (timestamp?: number) =>
+  timestamp ? new Date(timestamp * 1000).toLocaleString() : "Not recorded";
+const formatDateOnly = (timestamp?: number) =>
+  timestamp ? new Date(timestamp * 1000).toLocaleDateString() : "Not recorded";
 
 type HistoryEntry = {
   id: string;
@@ -30,9 +41,51 @@ type HistoryEntry = {
   to?: string;
   txHash: string;
   blockNumber: number;
+  timestamp?: number;
+};
+
+type UnitActivity = {
+  createdAt?: number;
+  initiatedAt?: number;
+  acceptedAt?: number;
+  rejectedAt?: number;
+  soldAt?: number;
+};
+
+type ActionPopup = {
+  message: string;
+  tone: "success" | "error";
 };
 
 const WALLET_STORAGE_KEY = "pharmatree-wallet-address";
+const EVENT_QUERY_WINDOW = 9_000;
+const DEFAULT_EVENT_LOOKBACK = 10_000;
+const ACTIVITY_CACHE_TTL = 30_000;
+const RPC_RETRY_DELAYS = [250, 750, 1500];
+const readonlyProvider = new ethers.JsonRpcProvider(
+  process.env.NEXT_PUBLIC_RPC_URL || "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2",
+  { chainId: 11155111, name: "sepolia" },
+  { staticNetwork: true }
+);
+let activityCache: { expiresAt: number; value: Record<string, UnitActivity> } | null = null;
+let activityRequest: Promise<Record<string, UnitActivity>> | null = null;
+
+async function withRpcRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const rateLimited =
+        message.includes("Too Many Requests") ||
+        message.includes("-32005") ||
+        message.includes("429") ||
+        message.includes("rate limit");
+      if (!rateLimited || attempt >= RPC_RETRY_DELAYS.length) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, RPC_RETRY_DELAYS[attempt]));
+    }
+  }
+}
 
 export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const [account, setAccount] = useState("");
@@ -45,6 +98,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [actionUnitId, setActionUnitId] = useState("1");
+  const [actionQuantity, setActionQuantity] = useState("1");
   const [actionReceiver, setActionReceiver] = useState("");
   const [medicineName, setMedicineName] = useState("Paracetamol");
   const [medicineQuantity, setMedicineQuantity] = useState("100");
@@ -54,14 +108,29 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>({});
   const [modalUnit, setModalUnit] = useState<UnitRecord | null>(null);
+  const [qrModalUnit, setQrModalUnit] = useState<UnitRecord | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [actionPopup, setActionPopup] = useState<ActionPopup | null>(null);
+  const actionInFlight = useRef(false);
   const router = useRouter();
+
+  const notifyAction = (message: string, tone: ActionPopup["tone"] = "success") => {
+    setActionPopup({ message, tone });
+  };
+
+  useEffect(() => {
+    if (!actionPopup) return;
+    const timeout = window.setTimeout(() => setActionPopup(null), 4500);
+    return () => window.clearTimeout(timeout);
+  }, [actionPopup]);
 
   const readonlyContract = useMemo(
     () =>
       new ethers.Contract(
         PHARMA_TREE_CONTRACT,
         PHARMA_TREE_ABI,
-        new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_RPC_URL || "http://127.0.0.1:8545")
+        readonlyProvider
       ),
     []
   );
@@ -70,32 +139,130 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     void refreshReadonlyState();
   }, [readonlyContract]);
 
-  async function fetchAllUnits(contract: ethers.Contract): Promise<UnitRecord[]> {
-    const count = await contract.unitCounter();
-    const unitsList: UnitRecord[] = [];
+  async function fetchUnitActivity(contract: ethers.Contract): Promise<Record<string, UnitActivity>> {
+    if (activityCache && activityCache.expiresAt > Date.now()) return activityCache.value;
+    if (activityRequest) return activityRequest;
 
-    for (let index = BigInt(1); index <= count; index++) {
+    activityRequest = (async () => {
       try {
-        const detail = await contract.getUnitDetails(index);
-        unitsList.push({
-          id: String(index),
-          parentId: String(detail[0]),
-          rootId: String(detail[1]),
-          level: Number(detail[2]),
-          manufacturer: detail[3],
-          currentOwner: detail[4],
-          pendingReceiver: detail[5],
-          status: Number(detail[6]),
-          metadata: detail[8],
-          quantity: String(detail[7]),
-          ownerLabel: detail[4],
-        } as UnitRecord);
-      } catch (error) {
-        console.warn(`Unable to read unit ${index.toString()}`, error);
+        const activity: Record<string, UnitActivity> = {};
+        const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
+        const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "0");
+        const fromBlock = configuredStart > 0
+          ? configuredStart
+          : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);
+        const logs: ethers.Log[] = [];
+        for (let start = fromBlock; start <= latestBlock; start += EVENT_QUERY_WINDOW) {
+          const end = Math.min(start + EVENT_QUERY_WINDOW - 1, latestBlock);
+          logs.push(...await withRpcRetry(() => readonlyProvider.getLogs({
+            address: PHARMA_TREE_CONTRACT,
+            fromBlock: start,
+            toBlock: end,
+          })));
+        }
+        const blockTimes = new Map<number, number>();
+        const uniqueBlockNumbers = Array.from(new Set(logs.map((l) => l.blockNumber)));
+        await Promise.all(
+          uniqueBlockNumbers.slice(0, 30).map(async (bNum) => {
+            try {
+              const block = await withRpcRetry(() => readonlyProvider.getBlock(bNum));
+              if (block) blockTimes.set(bNum, Number(block.timestamp));
+            } catch {
+              blockTimes.set(bNum, Math.floor(Date.now() / 1000));
+            }
+          })
+        );
+        for (const rawLog of logs) {
+          try {
+            const parsed = contract.interface.parseLog(rawLog);
+            if (!parsed || !parsed.args) continue;
+            const log = { ...rawLog, args: parsed.args, fragment: parsed.fragment };
+            const id = String(log.args[0]);
+            const current = activity[id] ?? {};
+            const timestamp = blockTimes.get(log.blockNumber) ?? Math.floor(Date.now() / 1000);
+            if (log.fragment?.name === "UnitCreated") current.createdAt = timestamp;
+            if (log.fragment?.name === "TransferInitiated") current.initiatedAt = timestamp;
+            if (log.fragment?.name === "TransferCompleted") current.acceptedAt = timestamp;
+            if (log.fragment?.name === "TransferRejected") current.rejectedAt = timestamp;
+            if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
+            activity[id] = current;
+          } catch {
+            // Skip unparseable log entry
+          }
+        }
+        activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: activity };
+        return activity;
+      } catch (err) {
+        console.warn("fetchUnitActivity failed:", err);
+        return {};
       }
-    }
+    })();
 
-    return unitsList;
+    try {
+      return await activityRequest;
+    } finally {
+      activityRequest = null;
+    }
+  }
+
+  async function fetchAllUnits(contract: ethers.Contract): Promise<UnitRecord[]> {
+    try {
+      const count = await contract.unitCounter();
+      const countNum = Number(count);
+      if (countNum <= 0) return [];
+
+      const promises: Promise<UnitRecord | null>[] = [];
+      for (let index = 1; index <= countNum; index++) {
+        promises.push(
+          contract.getUnitDetails(BigInt(index))
+            .then((detail: any) => ({
+              id: String(index),
+              displayId: String(index),
+              parentId: String(detail[0]),
+              rootId: String(detail[1]),
+              level: Number(detail[2]),
+              manufacturer: detail[3],
+              currentOwner: detail[4],
+              pendingReceiver: detail[5],
+              status: Number(detail[6]),
+              quantity: String(detail[7]),
+              metadata: detail[8],
+              ownerLabel: detail[4],
+            } as UnitRecord))
+            .catch((error: any) => {
+              console.warn(`Unable to read unit ${index}`, error);
+              return null;
+            })
+        );
+      }
+
+      const results = await Promise.all(promises);
+      const unitsList: UnitRecord[] = results.filter((u): u is UnitRecord => u !== null);
+
+      const childrenSeen: Record<string, number> = {};
+      const byId = new Map(unitsList.map((unit) => [unit.id, unit]));
+      for (const unit of unitsList) {
+        if (unit.parentId === "0") continue;
+        childrenSeen[unit.rootId] = (childrenSeen[unit.rootId] ?? 0) + 1;
+        const root = byId.get(unit.rootId);
+        unit.displayId = `${root?.displayId ?? unit.rootId}.${childrenSeen[unit.rootId]}`;
+      }
+
+      // Asynchronously enrich activity timestamps in background without blocking immediate render
+      void fetchUnitActivity(contract)
+        .then((activity) => {
+          if (!activity || Object.keys(activity).length === 0) return;
+          setUnits((prev) =>
+            prev.map((unit) => (activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit))
+          );
+        })
+        .catch(() => {});
+
+      return unitsList;
+    } catch (err) {
+      console.warn("fetchAllUnits error:", err);
+      return [];
+    }
   }
 
   async function refreshReadonlyState() {
@@ -107,39 +274,104 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     }
   }
 
+  const getEthereumProvider = () => {
+    if (typeof window === "undefined") return null;
+    const anyWin = window as any;
+    if (!anyWin.ethereum) return null;
+    if (Array.isArray(anyWin.ethereum.providers)) {
+      const mm = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
+      if (mm) return mm;
+    }
+    return anyWin.ethereum;
+  };
+
   async function connectWallet({ silent = false }: { silent?: boolean } = {}) {
-    if (typeof window === "undefined" || !(window as any).ethereum) {
-      setStatus("MetaMask is required");
+    const provider = getEthereumProvider();
+    if (!provider) {
+      if (!silent) {
+        const msg = "MetaMask is not detected. Please install or enable MetaMask.";
+        setStatus(msg);
+        notifyAction(msg, "error");
+      }
       return;
     }
 
     try {
       setLoading(true);
-      const provider = (window as any).ethereum;
-      const accounts = await provider.request({ method: "eth_accounts" });
-      const walletAddress = accounts && accounts.length > 0 ? accounts[0] : await provider.request({ method: "eth_requestAccounts" }).then((nextAccounts: string[]) => nextAccounts[0]);
+
+      let walletAddress: string | null = null;
+      const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+      if (accounts && accounts.length > 0) {
+        walletAddress = accounts[0];
+      } else if (!silent) {
+        const requested = (await provider.request({ method: "eth_requestAccounts" })) as string[];
+        if (requested && requested.length > 0) {
+          walletAddress = requested[0];
+        }
+      }
 
       if (!walletAddress) {
         if (!silent) {
-          setStatus("No wallet account available in MetaMask.");
+          const msg = "No wallet account selected in MetaMask. Please unlock MetaMask.";
+          setStatus(msg);
+          notifyAction(msg, "error");
         }
         return;
       }
 
       const browserProvider = new ethers.BrowserProvider(provider);
+      let network = await browserProvider.getNetwork();
+
+      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
+        try {
+          await provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: `0x${PHARMA_TREE_CHAIN_ID.toString(16)}` }],
+          });
+          network = await browserProvider.getNetwork();
+        } catch (switchError: any) {
+          console.warn("Chain switch request failed", switchError);
+          const msg = `Please switch MetaMask to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
+          setStatus(msg);
+          if (!silent) notifyAction(msg, "error");
+          return;
+        }
+      }
+
+      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
+        const msg = `Switch MetaMask to chain ${PHARMA_TREE_CHAIN_ID.toString()} before using PharmaTree.`;
+        setStatus(msg);
+        if (!silent) notifyAction(msg, "error");
+        return;
+      }
+
       const signer = await browserProvider.getSigner(walletAddress);
       const signerContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
 
       setContract(signerContract);
       setAccount(walletAddress);
       setConnected(true);
+      setLoading(false);
       localStorage.setItem(WALLET_STORAGE_KEY, walletAddress);
-      await loadWalletData(walletAddress, signerContract);
-      setStatus(`Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`);
-    } catch (error) {
-      console.error(error);
+
+      const message = `Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}.`;
+      setStatus(message);
+      if (!silent) notifyAction(message);
+
+      void loadWalletData(walletAddress, readonlyContract);
+    } catch (error: any) {
+      console.error("Wallet connection error:", error);
       if (!silent) {
-        setStatus("Wallet connection failed. Open MetaMask and approve the connection.");
+        let message = "Wallet connection failed.";
+        if (error?.code === 4001) {
+          message = "Connection rejected in MetaMask.";
+        } else if (error?.code === -32002) {
+          message = "Connection request already open in MetaMask. Please open your extension popup.";
+        } else if (error?.message) {
+          message = error.message.slice(0, 100);
+        }
+        setStatus(message);
+        notifyAction(message, "error");
       }
     } finally {
       setLoading(false);
@@ -147,21 +379,16 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   }
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (typeof window === "undefined") return;
 
-    const provider = (window as any).ethereum;
+    const provider = getEthereumProvider();
+    if (!provider) return;
+
     const autoConnect = async () => {
       try {
-        const accounts = provider ? await provider.request({ method: "eth_accounts" }) : [];
+        const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
         if (accounts && accounts.length > 0) {
           await connectWallet({ silent: true });
-        } else {
-          const savedWallet = window.localStorage.getItem(WALLET_STORAGE_KEY);
-          if (savedWallet) {
-            await connectWallet({ silent: true });
-          }
         }
       } catch (error) {
         console.warn("Auto-connect failed", error);
@@ -169,10 +396,6 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     };
 
     void autoConnect();
-
-    if (!provider) {
-      return;
-    }
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (!accounts || accounts.length === 0) {
@@ -192,8 +415,16 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       void connectWallet({ silent: true });
     };
 
+    const handleChainChanged = () => {
+      window.location.reload();
+    };
+
     provider.on("accountsChanged", handleAccountsChanged);
-    return () => provider.removeListener("accountsChanged", handleAccountsChanged);
+    provider.on("chainChanged", handleChainChanged);
+    return () => {
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+      provider.removeListener?.("chainChanged", handleChainChanged);
+    };
   }, []);
 
   useEffect(() => {
@@ -250,17 +481,17 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     );
   }
 
-  async function loadWalletData(walletAddress: string, signerContract: ethers.Contract) {
+  async function loadWalletData(walletAddress: string, contractToUse: ethers.Contract = readonlyContract) {
     try {
       const [manufacturer, handler, adminAddress] = await Promise.all([
-        signerContract.isManufacturer(walletAddress),
-        signerContract.isHandler(walletAddress),
-        signerContract.admin(),
+        contractToUse.isManufacturer(walletAddress),
+        contractToUse.isHandler(walletAddress),
+        contractToUse.admin(),
       ]);
       setRole({ manufacturer, handler });
       setIsAdmin(adminAddress.toLowerCase() === walletAddress.toLowerCase());
 
-      const allUnits = await fetchAllUnits(signerContract);
+      const allUnits = await fetchAllUnits(contractToUse);
       const unitDetails = allUnits.filter((unit) => {
         const lowerWallet = walletAddress.toLowerCase();
         return (
@@ -290,11 +521,20 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
         return {
           id: unit.id,
-          type: unit.status === 1 ? "TransferInitiated" : unit.status === 2 ? "UnitSold" : unit.status === 3 ? "TransferRejected" : "CurrentState",
+          type: unit.status === 1
+            ? "TransferInitiated"
+            : unit.status === 2
+              ? "UnitSold"
+              : unit.status === 3
+                ? "TransferRejected"
+                : unit.acceptedAt
+                  ? "TransferCompleted"
+                  : "CurrentState",
           from: unit.manufacturer,
           to: normalizedTarget,
           txHash: "state-read",
           blockNumber: 0,
+          timestamp: unit.acceptedAt ?? unit.initiatedAt ?? unit.createdAt,
         };
       });
       setUnits(allUnits);
@@ -331,19 +571,28 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       setStatus("Add a medicine name and tablet count before creating a unit.");
       return;
     }
+    const quantityValue = Number(quantity);
+    if (!Number.isInteger(quantityValue) || quantityValue <= 0) {
+      setStatus("Quantity must be a positive whole number.");
+      return;
+    }
 
     try {
       setLoading(true);
       const metadata = `${name}, ${quantity} tablets`;
-      const tx = await contract.createRootUnit(0, metadata);
+      const tx = await contract.createRootUnit(0, metadata, quantityValue);
       await tx.wait();
-      setStatus(`Medicine created successfully: ${name} (${quantity} tablets)`);
+      const message = `Medicine created: ${name} (${quantity} tablets).`;
+      setStatus(message);
+      notifyAction(message);
       setMedicineName("Paracetamol");
       setMedicineQuantity("100");
       await loadWalletData(account, contract);
     } catch (error) {
       console.error(error);
-      setStatus("Unable to create medicine. Check the connected wallet role and contract address.");
+      const message = "Medicine creation failed. Check the connected wallet role and contract address.";
+      setStatus(message);
+      notifyAction(message, "error");
     } finally {
       setLoading(false);
     }
@@ -376,73 +625,162 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         ? await contract.addManufacturer(roleTarget)
         : await contract.addHandler(roleTarget);
       await tx.wait();
-      setStatus(`${roleType === "manufacturer" ? "Manufacturer" : "Handler"} role granted to ${roleTarget}.`);
+      const roleName = roleType === "manufacturer" ? "Manufacturer" : "Handler";
+      const message = `${roleName} role granted to ${roleTarget}.`;
+      setStatus(message);
+      notifyAction(message);
       setRoleTarget("");
       await loadWalletData(account, contract);
     } catch (error) {
       console.error(error);
-      setStatus(`Role assignment failed for ${roleType}.`);
+      const message = `Could not grant the ${roleType} role.`;
+      setStatus(message);
+      notifyAction(message, "error");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleTransferAction(action: "initiate" | "accept" | "reject" | "sell") {
+  async function handleTransferAction(action: "initiate" | "accept" | "reject" | "sell", requestedUnitId = actionUnitId) {
+    if (loading || actionInFlight.current) return;
+    const failAction = (message: string) => {
+      setStatus(message);
+      notifyAction(message, "error");
+    };
     if (!contract || !account) {
-      setStatus("Connect a wallet before attempting a transfer action.");
-    
+      failAction("Connect a wallet before attempting a transfer action.");
       return;
     }
     
 
-    const unitId = Number(actionUnitId);
-    if (!Number.isFinite(unitId) || unitId < 0) {
-      setStatus("Use a valid medicine ID.");
+    const unitId = Number(requestedUnitId);
+    if (!Number.isInteger(unitId) || unitId <= 0) {
+      failAction("Select a valid medicine unit.");
       return;
     }
 
     try {
+      actionInFlight.current = true;
       setLoading(true);
       let tx;
 
       if (action === "initiate") {
         if (!actionReceiver.trim()) {
-          setStatus("Enter a receiver wallet before initiating a transfer.");
+          failAction("Enter a receiver wallet before initiating a transfer.");
+          return;
+        }
+        if (!ethers.isAddress(actionReceiver.trim())) {
+          failAction("Enter a valid receiver wallet address.");
           return;
         }
         if (!role.manufacturer && !role.handler) {
-          setStatus("Only a manufacturer or handler can initiate transfers.");
+          failAction("Only a manufacturer or handler can initiate transfers.");
           return;
         }
-        tx = await contract.initiateTransfer(unitId, actionReceiver);
+        const quantity = Number(actionQuantity);
+        if (!Number.isInteger(quantity) || quantity <= 0) {
+          failAction("Enter a whole-number quantity to transfer.");
+          return;
+        }
+        const selectedUnit = availableStockUnits.find((unit) => unit.id === requestedUnitId);
+        if (!selectedUnit) {
+          failAction("Select an active medicine unit from your inventory.");
+          return;
+        }
+        const availableQuantity = Number(selectedUnit.quantity);
+        if (!Number.isSafeInteger(availableQuantity) || quantity > availableQuantity) {
+          failAction(`Transfer quantity cannot exceed the ${availableQuantity}-unit stock available.`);
+          return;
+        }
+        let receiverIsManufacturer = false;
+        let receiverIsHandler = false;
+        try {
+          [receiverIsManufacturer, receiverIsHandler] = await Promise.all([
+            readonlyContract.isManufacturer(actionReceiver.trim()),
+            readonlyContract.isHandler(actionReceiver.trim()),
+          ]);
+        } catch (error) {
+          console.error("Unable to verify receiver authorization", error);
+          failAction("Could not verify the receiver wallet. Check the network connection and try again.");
+          return;
+        }
+        if (!receiverIsManufacturer && !receiverIsHandler) {
+          failAction("Transfer blocked: this wallet is not an authorized manufacturer or handler.");
+          return;
+        }
+        tx = await contract.initiatePartialTransfer(unitId, actionReceiver.trim(), quantity);
       } else if (action === "accept") {
         if (!role.manufacturer && !role.handler) {
-          setStatus("Only a manufacturer or handler can accept transfers.");
+          failAction("Only a manufacturer or handler can accept transfers.");
           return;
         }
         tx = await contract.acceptTransfer(unitId);
       } else if (action === "reject") {
         if (!role.manufacturer && !role.handler) {
-          setStatus("Only a manufacturer or handler can reject transfers.");
+          failAction("Only a manufacturer or handler can reject transfers.");
           return;
         }
         tx = await contract.rejectTransfer(unitId);
       } else {
         if (!role.manufacturer && !role.handler) {
-          setStatus("Only a manufacturer or handler can mark medicine as sold.");
+          failAction("Only a manufacturer or handler can mark medicine as sold.");
           return;
         }
-        tx = await contract.markAsSold(unitId);
+        const selectedUnit = availableStockUnits.find((unit) => unit.id === requestedUnitId);
+        if (!selectedUnit) {
+          failAction("Sale blocked: select an active medicine unit currently in your inventory.");
+          return;
+        }
+        const availableQuantity = Number(selectedUnit.quantity);
+        if (!Number.isSafeInteger(availableQuantity) || availableQuantity <= 0) {
+          failAction("Sale blocked: this unit has no quantity currently in stock.");
+          return;
+        }
+        const saleQuantity = Number(actionQuantity);
+        if (!Number.isInteger(saleQuantity) || saleQuantity <= 0) {
+          failAction("Enter a whole-number quantity to sell.");
+          return;
+        }
+        if (saleQuantity > availableQuantity) {
+          failAction(`Sale quantity cannot exceed the ${availableQuantity}-unit stock available.`);
+          return;
+        }
+        try {
+          if (typeof contract.sellQuantity === "function") {
+            tx = await contract.sellQuantity(unitId, saleQuantity);
+          } else {
+            tx = await contract.markAsSold(unitId);
+          }
+        } catch (sellErr: any) {
+          console.warn("sellQuantity call failed, falling back to markAsSold:", sellErr);
+          try {
+            tx = await contract.markAsSold(unitId);
+          } catch {
+            throw sellErr;
+          }
+        }
       }
 
       await tx.wait();
-      setStatus(`Transfer action succeeded: ${action}. Reloading data...`);
+      const actionMessage = {
+        initiate: "Transfer initiated and is waiting for acceptance.",
+        accept: "Transfer accepted. The medicine is now in your inventory.",
+        reject: "Transfer rejected.",
+        sell: "Medicine marked as sold.",
+      }[action];
+      setStatus(`${actionMessage} Reloading data...`);
+      notifyAction(actionMessage);
       setActionReceiver("");
       await loadWalletData(account, contract);
     } catch (error) {
       console.error(error);
-      setStatus(`Could not complete ${action}. Confirm the wallet role and action target.`);
+      const errorText = error instanceof Error ? error.message : String(error);
+      const reason = errorText.match(/reverted with reason string '([^']+)'/)?.[1] ?? errorText;
+      const message = `Could not ${action === "initiate" ? "initiate the transfer" : `${action} the medicine`}: ${reason.slice(0, 140)}`;
+      setStatus(message);
+      notifyAction(message, "error");
     } finally {
+      actionInFlight.current = false;
       setLoading(false);
     }
   }
@@ -456,10 +794,139 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     [account, units]
   );
 
+  const openQrModal = async (unit: UnitRecord) => {
+    setQrModalUnit(unit);
+    setCopiedLink(false);
+    setQrDataUrl("");
+    try {
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const verifyUrl = `${origin}/verify?unitId=${unit.id}`;
+      const dataUrl = await QRCode.toDataURL(verifyUrl, {
+        width: 280,
+        margin: 2,
+        color: {
+          dark: "#0f172a",
+          light: "#ffffff",
+        },
+      });
+      setQrDataUrl(dataUrl);
+    } catch (err) {
+      console.error("Failed to generate QR code:", err);
+    }
+  };
+
+  const getMedicineName = (metadata?: string) => {
+    if (!metadata) return "Medicine";
+    return metadata.split(",")[0].trim() || metadata;
+  };
+
+  // Helper to calculate status & statistics for a partition branch
+  const getPartitionBranchStats = (partitionUnit: UnitRecord, allUnits: UnitRecord[]) => {
+    const branchUnits = [partitionUnit];
+    const queue = [partitionUnit.id];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const kids = allUnits.filter((u) => u.parentId === currentId && u.id !== currentId);
+      for (const kid of kids) {
+        branchUnits.push(kid);
+        queue.push(kid.id);
+      }
+    }
+
+    const soldUnits = branchUnits.filter((u) => u.status === 2);
+    const soldQty = soldUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const activeUnits = branchUnits.filter((u) => u.status === 0);
+    const activeQty = activeUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const pendingUnits = branchUnits.filter((u) => u.status === 1);
+    const pendingQty = pendingUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const totalBranchQty = branchUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+
+    let statusText = "Transferred";
+    let statusBadgeClass = styles.statusTransferred;
+
+    if (soldQty === totalBranchQty && totalBranchQty > 0) {
+      statusText = "Sold";
+      statusBadgeClass = styles.statusSold;
+    } else if (soldQty > 0) {
+      statusText = "Partially sold";
+      statusBadgeClass = styles.statusPartialTransfer;
+    } else if (pendingQty > 0) {
+      statusText = "Pending transfer";
+      statusBadgeClass = styles.statusPending;
+    }
+
+    return {
+      soldQty,
+      activeQty,
+      pendingQty,
+      totalBranchQty,
+      statusText,
+      statusBadgeClass,
+    };
+  };
+
+  const createdRootSummaries = useMemo(() => {
+    const wallet = account.toLowerCase();
+    return units
+      .filter((unit) => unit.manufacturer.toLowerCase() === wallet && unit.parentId === "0")
+      .map((root) => {
+        const descendants = units.filter((unit) => unit.rootId === root.id && unit.id !== root.id);
+        const lineage = [root, ...descendants];
+        const totalQuantity = lineage.reduce((sum, unit) => sum + Number(unit.quantity), 0);
+        const manufacturerQuantity = lineage
+          .filter((unit) => unit.currentOwner.toLowerCase() === wallet && unit.status === 0)
+          .reduce((sum, unit) => sum + Number(unit.quantity), 0);
+        const directDescendants = descendants.filter((unit) => unit.parentId === root.id);
+        const partitions = directDescendants.length > 0 ? directDescendants : descendants.filter((unit) =>
+          unit.manufacturer.toLowerCase() === wallet ||
+          unit.currentOwner.toLowerCase() === wallet ||
+          unit.pendingReceiver.toLowerCase() === wallet
+        );
+        return { root, partitions, totalQuantity, manufacturerQuantity };
+      })
+      .filter((summary) => summary.totalQuantity > 0);
+  }, [account, units]);
+
   const ownedUnits = useMemo(
     () => units.filter((unit) => unit.currentOwner.toLowerCase() === account.toLowerCase()),
     [account, units]
   );
+
+  const inventoryGroups = useMemo(() => {
+    const wallet = account.toLowerCase();
+    const relevant = units.filter((unit) =>
+      unit.manufacturer.toLowerCase() === wallet ||
+      unit.currentOwner.toLowerCase() === wallet ||
+      (unit.status === 1 && unit.pendingReceiver.toLowerCase() === wallet)
+    );
+    const manufacturerTree = relevant.some((unit) => unit.manufacturer.toLowerCase() === wallet);
+    if (!manufacturerTree) {
+      return relevant
+        .filter((unit) =>
+          unit.currentOwner.toLowerCase() === wallet ||
+          (unit.status === 1 && unit.pendingReceiver.toLowerCase() === wallet)
+        )
+        .sort((left, right) => Number(left.id) - Number(right.id))
+        .map((unit) => ({ root: unit, partitions: [] }));
+    }
+    const rootIds = [...new Set(relevant.map((unit) => unit.rootId === "0" ? unit.id : unit.rootId))];
+
+    return rootIds.map((rootId) => {
+      const root = units.find((unit) => unit.id === rootId);
+      const manufacturerTree = root?.manufacturer.toLowerCase() === wallet;
+      const visibleUnits = manufacturerTree
+        ? units.filter((unit) => unit.id === rootId || unit.rootId === rootId)
+        : relevant.filter((unit) => unit.rootId === rootId);
+      const representative = root && (manufacturerTree || relevant.some((unit) => unit.id === root.id))
+        ? root
+        : visibleUnits[0];
+
+      return {
+        root: representative,
+        partitions: visibleUnits.filter((unit) => unit.id !== representative?.id),
+      };
+    }).filter((group): group is { root: UnitRecord; partitions: UnitRecord[] } => Boolean(group.root));
+  }, [account, units]);
 
   const pendingIncoming = useMemo(
     () => units.filter((unit) => unit.pendingReceiver.toLowerCase() === account.toLowerCase() && unit.status === 1),
@@ -481,6 +948,48 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     [account, units]
   );
 
+  const walletLocalIds = useMemo(() => {
+    const relevant = units
+      .filter((unit) =>
+        unit.currentOwner.toLowerCase() === account.toLowerCase() ||
+        (unit.status === 1 && unit.pendingReceiver.toLowerCase() === account.toLowerCase())
+      )
+      .sort((left, right) => Number(left.id) - Number(right.id));
+    return new Map(relevant.map((unit, index) => [unit.id, String(index + 1)]));
+  }, [account, units]);
+
+  const localUnitId = (unit: UnitRecord) => walletLocalIds.get(unit.id) ?? unit.displayId;
+  const hasSoldChildren = (unit: UnitRecord) =>
+    units.some((k) => k.parentId === unit.id && k.status === 2);
+
+  const displayStatus = (unit: UnitRecord) =>
+    unit.status === 2
+      ? "Sold"
+      : unit.status === 1
+        ? "Pending transfer"
+        : unit.status === 3
+          ? "Rejected"
+          : unit.currentOwner.toLowerCase() === account.toLowerCase()
+            ? (hasSoldChildren(unit) ? "Partially sold" : "In stock")
+            : "Transferred";
+  const statusClass = (unit: UnitRecord) =>
+    unit.status === 2
+      ? styles.statusSold
+      : unit.status === 1
+        ? styles.statusPending
+        : unit.status === 3
+          ? styles.statusRejected
+          : unit.currentOwner.toLowerCase() === account.toLowerCase()
+            ? (hasSoldChildren(unit) ? styles.statusPartialTransfer : styles.statusInStock)
+            : styles.statusTransferred;
+
+  useEffect(() => {
+    if (availableStockUnits.length > 0 && !availableStockUnits.some((unit) => unit.id === actionUnitId)) {
+      setActionUnitId(availableStockUnits[0].id);
+      setActionQuantity(availableStockUnits[0].quantity);
+    }
+  }, [actionUnitId, availableStockUnits]);
+
   const userUnits = useMemo(
     () =>
       units.filter(
@@ -493,7 +1002,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   );
 
   const visibleHistory = useMemo(
-    () => history.filter((entry) => entry.txHash),
+    () => history.filter((entry) => entry.txHash && entry.type !== "CurrentState"),
     [history]
   );
 
@@ -513,7 +1022,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
         <div className={styles.headerActions}>
           <button className={styles.primaryButton} onClick={() => void connectWallet()} disabled={loading}>
-            {loading ? "Connecting..." : connected ? "Reconnect wallet" : "Reconnect wallet"}
+            {loading ? "Connecting..." : connected ? (account ? `${account.slice(0, 6)}...${account.slice(-4)}` : "Connected") : "Connect wallet"}
           </button>
           <button type="button" className={styles.notifyButton} aria-label="Pending transfers" onClick={() => router.push('/transfers')}>
             <span>🔔</span>
@@ -597,26 +1106,81 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                     </div>
                   </div>
 
-                  {createdByUser.length === 0 ? (
+                  {createdRootSummaries.length === 0 ? (
                     <p className={styles.empty}>No medicines created by this wallet yet.</p>
                   ) : (
                     <div className={styles.dataTable}>
                       <div className={styles.tableHead} style={{ color: '#334155' }}>
                         <span>ID</span>
                         <span>Medicine</span>
-                        <span>Qty</span>
-                        <span>Created</span>
+                        <span>Qty in stock</span>
                         <span>Status</span>
+                        <span aria-hidden="true" />
                       </div>
-                      {createdByUser.map((unit) => {
-                        const medName = (unit.metadata || "").split(",")[0] || unit.metadata;
+                      {createdRootSummaries.map(({ root, partitions, totalQuantity, manufacturerQuantity }) => {
+                        const medName = (root.metadata || "").split(",")[0] || root.metadata;
+                        const hasTransferredPortion = [root, ...partitions].some((unit) =>
+                          unit.currentOwner.toLowerCase() !== account.toLowerCase() ||
+                          unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+                        );
+                        const hasSoldPortion = [root, ...partitions].some((unit) => unit.status === 2);
+                        const rootStatus = manufacturerQuantity === totalQuantity
+                          ? "In stock"
+                          : manufacturerQuantity > 0
+                            ? "Partially transferred"
+                            : hasTransferredPortion
+                              ? "Transferred"
+                              : hasSoldPortion
+                                ? "Sold"
+                                : "Partially transferred";
+                        const rootStatusClass = rootStatus === "In stock"
+                          ? styles.statusInStock
+                          : rootStatus === "Sold"
+                            ? styles.statusSold
+                            : rootStatus === "Transferred"
+                              ? styles.statusTransferred
+                              : styles.statusPartialTransfer;
+                        const rootExpanded = !!expandedUnits[`overview-${root.id}`];
                         return (
-                          <div className={styles.tableRow} key={unit.id}>
-                            <span>#{unit.id}</span>
-                            <span>{medName}</span>
-                            <span>{unit.quantity}</span>
-                            <span>—</span>
-                            <span className={styles.statusBadge}>{unitStatusToName(unit.status)}</span>
+                          <div className={styles.createdMedicineGroup} key={root.id}>
+                            <button
+                              type="button"
+                              className={styles.tableRow}
+                              aria-expanded={partitions.length > 0 ? rootExpanded : undefined}
+                              onClick={() => partitions.length > 0 && setExpandedUnits((previous) => ({
+                                ...previous,
+                                [`overview-${root.id}`]: !rootExpanded,
+                              }))}
+                            >
+                              <span>#{root.displayId}</span>
+                              <span>{medName}</span>
+                              <span>{manufacturerQuantity}/{totalQuantity}</span>
+                              <span className={`${styles.statusBadge} ${rootStatusClass}`}>
+                                {rootStatus}
+                              </span>
+                              {partitions.length > 0 && <span className={styles.partitionChevron}>{rootExpanded ? "−" : "+"}</span>}
+                            </button>
+                            {partitions.length > 0 && rootExpanded && (
+                              <div className={styles.partitionList}>
+                                {partitions.map((partition) => {
+                                  const stats = getPartitionBranchStats(partition, units);
+                                  return (
+                                    <div className={styles.partitionTile} key={partition.id}>
+                                      <div className={styles.partitionRow}>
+                                        <span><strong>#{partition.displayId}</strong></span>
+                                        <span>
+                                          Qty {stats.activeQty > 0 ? stats.activeQty : 0}
+                                          {stats.soldQty > 0 ? ` (${stats.soldQty}/${stats.totalBranchQty} Sold)` : ""}
+                                        </span>
+                                        <span className={`${styles.statusBadge} ${stats.statusBadgeClass}`}>
+                                          {stats.statusText}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -626,7 +1190,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                   <div className={styles.footerRow}>
                     <div>
                       <span>Units Created This Quarter:</span>
-                      <strong>{createdByUser.length}</strong>
+                      <strong>{createdRootSummaries.length}</strong>
                     </div>
                     <button
                       className={`${styles.primaryButton} ${!canCreateMedicine ? styles.primaryButtonDisabled : ""}`}
@@ -640,7 +1204,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
               )}
 
               {/* MY OWNED INVENTORY (ALWAYS VISIBLE) */}
-              <section className={styles.featurePanel}>
+              <section className={`${styles.featurePanel} ${styles.inventoryOverviewPanel}`}>
                 <div className={styles.panelHeader}>
                   <div className={styles.panelIcon}>📦</div>
                   <div>
@@ -658,17 +1222,23 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                       <span>Medicine</span>
                       <span>Qty</span>
                       <span>Location</span>
-                      <span>Received</span>
+                      <span>{role.manufacturer || isAdmin ? "Created" : "Status"}</span>
                     </div>
                     {ownedUnits.map((unit) => {
                       const medName = (unit.metadata || "").split(",")[0] || unit.metadata;
                       return (
                         <div className={styles.tableRow} key={unit.id}>
-                          <span>#{unit.id}</span>
+                          <span>#{role.manufacturer || isAdmin ? unit.displayId : localUnitId(unit)}</span>
                           <span>{medName}</span>
                           <span>{unit.quantity}</span>
                           <span>WARE-H</span>
-                          <span>—</span>
+                          <span>{role.manufacturer || isAdmin ? (
+                            formatDateOnly(unit.createdAt)
+                          ) : (
+                            <span className={`${styles.statusBadge} ${statusClass(unit)}`}>
+                              {displayStatus(unit)}
+                            </span>
+                          )}</span>
                         </div>
                       );
                     })}
@@ -808,7 +1378,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                       onClick={() => void handleRoleAssignment()}
                       disabled={loading}
                     >
-                      { (role.handler && !isAdmin && !role.manufacturer) ? "Add handler" : "Grant role" }le
+                      {(role.handler && !isAdmin && !role.manufacturer) ? "Add handler" : "Grant role"}
                     </button>
                   </div>
                 </>
@@ -818,11 +1388,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
 
           {mode === "transfers" && (
             <div className={styles.transferGrid}>
-              <section className={styles.panel}>
-                <h2>Pending transfer actions</h2>
-                {pendingTransferUnits.length === 0 ? (
-                  <p className={styles.empty}>No pending transfers require action for this wallet.</p>
-                ) : (
+              {pendingTransferUnits.length > 0 && (
+                <section className={styles.panel}>
+                  <h2>Pending transfer actions</h2>
                   <div className={styles.inventoryGrid}>
                     {pendingTransferUnits.map((unit) => {
                       const medName = (unit.metadata || "").split(",")[0] || unit.metadata;
@@ -830,12 +1398,14 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                         <article key={unit.id} className={styles.transferTile} onClick={() => setModalUnit(unit)}>
                           <div className={styles.tileHeader}>
                             <div className={styles.tileTitle}>{medName}</div>
-                            <div className={styles.tileMeta}>Unit #{unit.id}</div>
+                            <div className={styles.tileMeta}>Unit #{localUnitId(unit)}</div>
                           </div>
                           <div className={styles.tileBody}>
                             <div><strong>From:</strong> {unit.currentOwner}</div>
                             <div><strong>To:</strong> {unit.pendingReceiver || "-"}</div>
-                            <div><strong>Status:</strong> {unitStatusToName(unit.status)}</div>
+                            <div><strong>Quantity:</strong> {unit.quantity}</div>
+                            <div><strong>Initiated:</strong> {formatDate(unit.initiatedAt)}</div>
+                            <div><strong>Status:</strong> {displayStatus(unit)}</div>
                           </div>
                           <div style={{marginTop:10}}>
                             <button className={styles.secondaryButton} onClick={(e) => { e.stopPropagation(); setModalUnit(unit); }}>View details</button>
@@ -844,27 +1414,55 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                       );
                     })}
                   </div>
-                )}
-              </section>
+                </section>
+              )}
 
               <section className={styles.panel}>
                 <h2>Transfer and sale actions</h2>
+                {pendingTransferUnits.length === 0 && (
+                  <p className={styles.compactEmpty}>No pending transfers.</p>
+                )}
                 <div className={styles.formGrid}>
                   <div className={styles.fieldGroup}>
-                    <label>Medicine ID</label>
-                    <input value={actionUnitId} onChange={(event) => setActionUnitId(event.target.value)} placeholder="1" />
+                    <label>Medicine in your inventory</label>
+                    <select
+                      value={actionUnitId}
+                      onChange={(event) => setActionUnitId(event.target.value)}
+                      disabled={availableStockUnits.length === 0}
+                    >
+                      {availableStockUnits.length === 0 ? (
+                        <option value="">No available units</option>
+                      ) : (
+                        availableStockUnits.map((unit) => (
+                          <option key={unit.id} value={unit.id}>
+                            Unit {localUnitId(unit)} · {(unit.metadata || "").split(",")[0] || "Medicine"} · {unit.quantity} available
+                          </option>
+                        ))
+                      )}
+                    </select>
                   </div>
                   <div className={styles.fieldGroup}>
                     <label>Receiver wallet</label>
                     <input value={actionReceiver} onChange={(event) => setActionReceiver(event.target.value)} placeholder="0x..." />
                   </div>
+                  <div className={styles.fieldGroup}>
+                    <label>Quantity to transfer</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={actionQuantity}
+                      onChange={(event) => setActionQuantity(event.target.value)}
+                      placeholder="1"
+                    />
+                  </div>
                 </div>
 
                 <div className={styles.buttonRow}>
-                  <button onClick={() => void handleTransferAction("initiate")} disabled={!account || (!role.manufacturer && !role.handler)}>
+                  <button className={styles.transferActionButton} onClick={() => void handleTransferAction("initiate")} disabled={!account || (!role.manufacturer && !role.handler)}>
                     Initiate transfer
                   </button>
-                  <button onClick={() => void handleTransferAction("sell")} disabled={!account || (!role.manufacturer && !role.handler)}>
+                  <button className={`${styles.transferActionButton} ${styles.sellActionButton}`} onClick={() => void handleTransferAction("sell")} disabled={!account || (!role.manufacturer && !role.handler)}>
                     Mark as sold
                   </button>
                 </div>
@@ -880,9 +1478,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                         <button key={unit.id} type="button" className={styles.stockButton} onClick={() => {
                           setActionUnitId(unit.id);
                           setActionReceiver("");
+                          setActionQuantity(String(unit.quantity));
                         }}>
                           <div>{medName}</div>
-                          <div>Unit #{unit.id}</div>
+                          <div>Unit #{localUnitId(unit)}</div>
                           <div>Qty {unit.quantity}</div>
                         </button>
                       );
@@ -892,7 +1491,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
               </section>
 
               {/* History tiles */}
-              <section className={styles.panel} style={{marginTop:16}}>
+              <section className={`${styles.panel} ${styles.historyPanel}`}>
                 <h2>Recent activity</h2>
                 {visibleHistory.length === 0 ? (
                   <p className={styles.empty}>No recent activity for this wallet.</p>
@@ -908,7 +1507,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                               <div className={styles.tileMeta}>{entry.type}</div>
                             </div>
                             <div className={styles.tileBody}>
-                              <div><strong>Unit:</strong> {entry.id}</div>
+                              <div><strong>Unit:</strong> {unit
+                                ? (role.manufacturer || isAdmin ? unit.displayId : localUnitId(unit))
+                                : entry.id}</div>
+                              <div><strong>When:</strong> {formatDate(entry.timestamp)}</div>
                               <div><strong>From:</strong> <span style={{ fontFamily: 'monospace' }}>{formatAddress(entry.from)}</span></div>
                               <div><strong>To:</strong> <span style={{ fontFamily: 'monospace' }}>{formatAddress(entry.to)}</span></div>
                             </div>
@@ -929,10 +1531,18 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                 <p className={styles.empty}>No medicine records for this account.</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
-                  {userUnits.map((unit) => {
-                    const isExpanded = !!expandedUnits[unit.id];
-                    const unitHistoryLogs = history.filter((h) => h.id === unit.id);
+                  {inventoryGroups.map(({ root: unit, partitions }) => {
+                    const isExpanded = !!expandedUnits[`inventory-${unit.id}`];
                     const medName = (unit.metadata || "").split(",")[0] || unit.metadata;
+                    const manufacturerTree = unit.manufacturer.toLowerCase() === account.toLowerCase();
+                    const lineage = [unit, ...partitions];
+                    const totalQuantity = lineage.reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
+                    const currentQuantity = lineage
+                      .filter((candidate) => candidate.status === 0 && candidate.currentOwner.toLowerCase() === account.toLowerCase())
+                      .reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
+                    const isPartial = manufacturerTree && currentQuantity < totalQuantity;
+                    const rootStatus = isPartial ? "Partially transferred" : displayStatus(unit);
+                    const unitHistoryLogs = history.filter((h) => h.id === unit.id);
                     const truncate = (addr: string) =>
                       addr && addr !== "0x0000000000000000000000000000000000000000"
                         ? `${addr.slice(0, 6)}...${addr.slice(-4)}`
@@ -944,31 +1554,35 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                         style={{
                           border: '1px solid #e2e8f0',
                           borderRadius: '12px',
-                          padding: '16px',
+                          padding: '0',
                           backgroundColor: '#ffffff',
                           boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
                         }}
                       >
-                        {/* Clickable Tile Header */}
-                        <div
-                          onClick={() => setExpandedUnits((prev) => ({ ...prev, [unit.id]: !prev[unit.id] }))}
-                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                        <button
+                          type="button"
+                          className={styles.inventoryTileHeader}
+                          aria-expanded={isExpanded}
+                          onClick={() => setExpandedUnits((prev) => ({
+                             ...prev,
+                             [`inventory-${unit.id}`]: !isExpanded,
+                          }))}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <span style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a' }}>UNIT #{unit.id}</span>
-                            <span style={{ fontSize: '14px', color: '#64748b' }}>({medName})</span>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <span className={styles.statusBadge}>{unitStatusToName(unit.status)}</span>
-                            <span style={{ fontSize: '14px', color: '#64748b', fontWeight: 'bold' }}>
-                              {isExpanded ? '▲' : '▼'}
-                            </span>
-                          </div>
-                        </div>
+                          <span className={styles.inventoryTileIdentity}>
+                             <strong>UNIT #{localUnitId(unit)}</strong>
+                             <span>{medName}</span>
+                          </span>
+                          <span className={styles.inventoryTileSummary}>
+                             <strong>{manufacturerTree ? `${currentQuantity}/${totalQuantity}` : `Qty ${unit.quantity}`}</strong>
+                             <span className={`${styles.statusBadge} ${isPartial ? styles.statusTransferred : statusClass(unit)}`}>
+                               {rootStatus}
+                             </span>
+                             <span className={styles.inventoryTileChevron}>{isExpanded ? '−' : '+'}</span>
+                          </span>
+                        </button>
 
-                        {/* Collapsible Content */}
                         {isExpanded && (
-                          <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #f1f5f9', fontSize: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div className={styles.inventoryTileContent}>
                             <p style={{ margin: 0, color: '#334155' }}>
                               <strong>Manufacturer:</strong> <span style={{ fontFamily: 'monospace' }}>{truncate(unit.manufacturer)}</span>
                             </p>
@@ -978,9 +1592,22 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                             <p style={{ margin: 0, color: '#334155' }}>
                               <strong>Pending Receiver:</strong> <span style={{ fontFamily: 'monospace' }}>{truncate(unit.pendingReceiver)}</span>
                             </p>
-                            <p style={{ margin: 0, color: '#334155' }}><strong>Quantity:</strong> {unit.quantity}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Quantity:</strong> {manufacturerTree ? `${currentQuantity} in stock / ${totalQuantity} total` : unit.quantity}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Parent / root:</strong> {unit.parentId === "0" ? "Root" : `${unit.parentId} / ${unit.rootId}`}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Created:</strong> {formatDate(unit.createdAt)}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Accepted:</strong> {formatDate(unit.acceptedAt)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Container Level:</strong> {unitLevelToName(unit.level)}</p>
-                            <p style={{ margin: 0, color: '#334155' }}><strong>Metadata:</strong> {unit.metadata}</p>
+                            <p style={{ margin: 0, color: '#334155' }}><strong>Medicine:</strong> {getMedicineName(unit.metadata)} ({unit.quantity} tablets)</p>
+                            <div style={{ marginTop: '10px', marginBottom: '6px' }}>
+                              <button
+                                type="button"
+                                className={styles.secondaryButton}
+                                style={{ padding: '6px 14px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
+                                onClick={() => void openQrModal(unit)}
+                              >
+                                📱 View Public QR Code
+                              </button>
+                            </div>
 
                             {/* Unit History */}
                             <div style={{ marginTop: '12px', backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px' }}>
@@ -998,6 +1625,45 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                 <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>No transfer events recorded yet.</p>
                               )}
                             </div>
+
+                            {partitions.length > 0 && (
+                              <div className={styles.inventoryPartitions}>
+                                <h4 style={{ margin: '0 0 8px', fontSize: '12px', textTransform: 'uppercase', color: '#1d4ed8', letterSpacing: '0.05em' }}>
+                                  Partitions of unit #{role.manufacturer || isAdmin ? unit.displayId : localUnitId(unit)}
+                                </h4>
+                                <div className={styles.inventoryPartitionList}>
+                                  {partitions.map((partition) => {
+                                    const partitionExpanded = !!expandedUnits[`inventory-partition-${partition.id}`];
+                                    return (
+                                      <div key={partition.id} className={styles.inventoryPartitionTile}>
+                                        <button
+                                          type="button"
+                                          className={styles.inventoryPartitionRow}
+                                          aria-expanded={partitionExpanded}
+                                          onClick={() => setExpandedUnits((prev) => ({
+                                            ...prev,
+                                            [`inventory-partition-${partition.id}`]: !partitionExpanded,
+                                          }))}
+                                        >
+                                          <strong>#{role.manufacturer || isAdmin ? partition.displayId : localUnitId(partition)}</strong>
+                                          <span>Qty {partition.quantity}</span>
+                                          <span className={`${styles.statusBadge} ${statusClass(partition)}`}>{displayStatus(partition)}</span>
+                                          <span className={styles.partitionChevron}>{partitionExpanded ? '−' : '+'}</span>
+                                        </button>
+                                        {partitionExpanded && (
+                                          <div className={styles.partitionDetails}>
+                                            <span>Current owner</span>
+                                            <strong>{truncate(partition.currentOwner)}</strong>
+                                            <span>To</span>
+                                            <strong>{truncate(partition.pendingReceiver)}</strong>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                       </article>
@@ -1010,7 +1676,118 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         </main>
       </div>
 
-      {modalUnit && (
+      {actionPopup && (
+        <div className={`${styles.actionPopup} ${actionPopup.tone === "error" ? styles.actionPopupError : ""}`} role="status" aria-live="polite">
+          <strong>{actionPopup.tone === "error" ? "Action failed" : "Action complete"}</strong>
+          <span>{actionPopup.message}</span>
+          <button type="button" onClick={() => setActionPopup(null)} aria-label="Dismiss message">×</button>
+        </div>
+      )}
+
+      
+        {qrModalUnit && (
+          <div className={styles.modalBackdrop} onClick={() => setQrModalUnit(null)}>
+            <div
+              className={styles.modalContent}
+              style={{ maxWidth: '420px', textAlign: 'center', padding: '24px' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', color: '#0d9488', letterSpacing: '0.05em' }}>
+                  Public Verification QR
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQrModalUnit(null)}
+                  style={{ border: 'none', background: 'transparent', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <h3 style={{ margin: '0 0 4px 0', fontSize: '19px', fontWeight: 700, color: '#0f172a' }}>
+                {getMedicineName(qrModalUnit.metadata)}
+              </h3>
+              <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#64748b' }}>
+                Unit #{qrModalUnit.id} · {qrModalUnit.quantity} tablets in stock
+              </p>
+
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  padding: '16px',
+                  borderRadius: '16px',
+                  display: 'inline-block',
+                  boxShadow: '0 4px 12px rgba(15,23,42,0.08)',
+                  border: '1px solid #e2e8f0',
+                  marginBottom: '18px',
+                }}
+              >
+                {qrDataUrl ? (
+                  <img
+                    src={qrDataUrl}
+                    alt={`QR Code for Unit #${qrModalUnit.id}`}
+                    style={{ width: '220px', height: '220px', display: 'block' }}
+                  />
+                ) : (
+                  <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+                    Generating QR code...
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className={styles.primaryButton}
+                    style={{ flex: 1, padding: '10px' }}
+                    onClick={() => {
+                      if (!qrDataUrl) return;
+                      const a = document.createElement("a");
+                      a.href = qrDataUrl;
+                      a.download = `pharmatree-unit-${qrModalUnit.id}-qr.png`;
+                      a.click();
+                    }}
+                  >
+                    ⬇ Download PNG
+                  </button>
+
+                  <button
+                    type="button"
+                    className={styles.secondaryButton}
+                    style={{ flex: 1, padding: '10px' }}
+                    onClick={async () => {
+                      const origin = typeof window !== "undefined" ? window.location.origin : "";
+                      const link = `${origin}/verify?unitId=${qrModalUnit.id}`;
+                      try {
+                        await navigator.clipboard.writeText(link);
+                        setCopiedLink(true);
+                        setTimeout(() => setCopiedLink(false), 2500);
+                      } catch {
+                        // clipboard fallback
+                      }
+                    }}
+                  >
+                    {copiedLink ? "✓ Copied!" : "📋 Copy Link"}
+                  </button>
+                </div>
+
+                <a
+                  href={`/verify?unitId=${qrModalUnit.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.secondaryButton}
+                  style={{ display: 'block', textDecoration: 'none', padding: '10px', textAlign: 'center' }}
+                >
+                  Open Public Verification Page ↗
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {modalUnit && (
         <div className={styles.unitModalBackdrop} onClick={() => setModalUnit(null)}>
           <div className={styles.unitModalContent} onClick={(e) => e.stopPropagation()}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
@@ -1018,13 +1795,16 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
               <button className={styles.modalClose} onClick={() => setModalUnit(null)}>✕</button>
             </div>
             <div style={{marginTop:12}}>
-              <p><strong>Unit ID:</strong> {modalUnit.id}</p>
+              <p><strong>Unit ID:</strong> {modalUnit.displayId}</p>
               <p><strong>Manufacturer:</strong> {modalUnit.manufacturer}</p>
               <p><strong>Current owner:</strong> {modalUnit.currentOwner}</p>
               <p><strong>Pending receiver:</strong> {modalUnit.pendingReceiver || 'None'}</p>
               <p><strong>Quantity:</strong> {modalUnit.quantity}</p>
-              <p><strong>Status:</strong> {unitStatusToName(modalUnit.status)}</p>
-              <p><strong>Metadata:</strong> {modalUnit.metadata}</p>
+              <p><strong>Parent / root:</strong> {modalUnit.parentId === "0" ? "Root" : `${modalUnit.parentId} / ${modalUnit.rootId}`}</p>
+              <p><strong>Created:</strong> {formatDate(modalUnit.createdAt)}</p>
+              <p><strong>Accepted:</strong> {formatDate(modalUnit.acceptedAt)}</p>
+              <p><strong>Status:</strong> {displayStatus(modalUnit)}</p>
+              <p><strong>Medicine Details:</strong> {getMedicineName(modalUnit.metadata)} ({modalUnit.quantity} tablets)</p>
 
               {modalUnit.status === 1 && modalUnit.pendingReceiver.toLowerCase() === account.toLowerCase() && (
                 <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
@@ -1034,10 +1814,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                       if (!modalUnit) return;
                       setActionUnitId(modalUnit.id);
                       setActionReceiver(modalUnit.pendingReceiver);
-                      await handleTransferAction('accept');
+                      await handleTransferAction('accept', modalUnit.id);
                       setModalUnit(null);
                     }}
-                    disabled={!account || (!role.manufacturer && !role.handler)}
+                    disabled={loading || !account || (!role.manufacturer && !role.handler)}
                   >
                     Accept
                   </button>
@@ -1046,10 +1826,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                     onClick={async () => {
                       if (!modalUnit) return;
                       setActionUnitId(modalUnit.id);
-                      await handleTransferAction('reject');
+                      await handleTransferAction('reject', modalUnit.id);
                       setModalUnit(null);
                     }}
-                    disabled={!account || (!role.manufacturer && !role.handler)}
+                    disabled={loading || !account || (!role.manufacturer && !role.handler)}
                   >
                     Reject
                   </button>

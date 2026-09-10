@@ -1,0 +1,29 @@
+{
+  "name": "pharmatree-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PharmaTree: Blockchain-Based Pharmaceutical Supply Chain Tracking & Verification System",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start",
+    "lint": "npm --prefix frontend run lint",
+    "compile": "npm --prefix backend run compile",
+    "test": "npm --prefix backend test",
+    "test:backend": "npm --prefix backend test",
+    "test:all": "npm --prefix backend test && npm --prefix frontend run build",
+    "deploy:sepolia": "npm --prefix backend run deploy:sepolia"
+  },
+  "keywords": [
+    "blockchain",
+    "pharmaceutical",
+    "supply-chain",
+    "ethereum",
+    "sepolia",
+    "solidity",
+    "nextjs",
+    "hardhat"
+  ],
+  "author": "Ayon Moitra",
+  "license": "MIT"
+}

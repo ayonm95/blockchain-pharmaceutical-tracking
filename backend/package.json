@@ -9,6 +9,8 @@
     "node": "hardhat node",
     "deploy": "hardhat run scripts/deploy.ts",
     "deploy:sepolia": "hardhat run scripts/deploy-sepolia.ts --network sepolia",
+    "deploy:demo-sepolia": "hardhat run scripts/deploy-demo-sepolia.ts --network sepolia",
+    "deploy:fresh-manufacturer": "hardhat run scripts/deploy-fresh-manufacturer.ts --network sepolia",
     "verify:sepolia-two-wallet": "hardhat run scripts/sepolia-two-wallet-flow.ts --network sepolia",
     "verify:sepolia": "hardhat run scripts/sepolia-one-click-flow.ts --network sepolia"
   },

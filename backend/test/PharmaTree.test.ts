@@ -50,7 +50,8 @@ describe("PharmaTree Smart Contract", function () {
     it("Should allow an authorized manufacturer to create a root unit", async function () {
       const tx = await pharmaTree.connect(manufacturer).createRootUnit(
         UnitLevel.Container,
-        "IPFS_CID_CONTAINER_METADATA"
+      "IPFS_CID_CONTAINER_METADATA",
+      1
       );
 
       await expect(tx)
@@ -67,13 +68,36 @@ describe("PharmaTree Smart Contract", function () {
 
     it("Should prevent unauthorized users from creating root units", async function () {
       await expect(
-        pharmaTree.connect(unauthorized).createRootUnit(UnitLevel.Container, "Meta")
+        pharmaTree.connect(unauthorized).createRootUnit(UnitLevel.Container, "Meta", 1)
       ).to.be.revertedWith("Only manufacturers can create root units");
+    });
+
+    it("Should preserve the sender remainder when transferring a partial quantity", async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Paracetamol", 100);
+
+      await pharmaTree.connect(manufacturer).initiatePartialTransfer(1, distributor.address, 40);
+
+      const source = await pharmaTree.getUnitDetails(1);
+      const split = await pharmaTree.getUnitDetails(2);
+      expect(source.quantity).to.equal(60);
+      expect(source.status).to.equal(Status.Active);
+      expect(split.quantity).to.equal(40);
+      expect(split.parentId).to.equal(1);
+      expect(split.rootId).to.equal(1);
+      expect(split.status).to.equal(Status.PendingTransfer);
+
+      await pharmaTree.connect(distributor).acceptTransfer(2);
+      const received = await pharmaTree.getUnitDetails(2);
+      expect(received.currentOwner).to.equal(distributor.address);
+      expect(received.quantity).to.equal(40);
+      expect(received.status).to.equal(Status.Active);
+      expect(source.metadata).to.equal("Paracetamol, 60 tablets");
+      expect(split.metadata).to.equal("Paracetamol, 40 tablets");
     });
 
     it("Should allow packing child units under a parent unit", async function () {
       // 1. Create Parent Container (ID 1)
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container-01");
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container-01", 1);
 
       // 2. Pack 5 Boxes (Child units) under Parent ID 1
       await pharmaTree.connect(manufacturer).createChildUnits(
@@ -93,7 +117,7 @@ describe("PharmaTree Smart Contract", function () {
     });
 
     it("Should prevent non-owners from packing children under a parent", async function () {
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container-01");
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container-01", 1);
 
       await expect(
         pharmaTree.connect(unauthorized).createChildUnits(1, UnitLevel.Box, "Meta", 2)
@@ -104,7 +128,7 @@ describe("PharmaTree Smart Contract", function () {
   describe("Two-Party Transfer Handshake", function () {
     beforeEach(async function () {
       // Setup: Create a root unit (ID 1)
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Batch-001");
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Batch-001", 1);
     });
 
     it("Should successfully initiate and accept a transfer", async function () {
@@ -164,7 +188,7 @@ describe("PharmaTree Smart Contract", function () {
   describe("Final Sale & Inventory Detachment", function () {
     beforeEach(async function () {
       // Manufacturer -> Distributor -> Pharmacy -> Sold
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.IndividualItem, "Pill-01");
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.IndividualItem, "Pill-01", 1);
       await pharmaTree.connect(manufacturer).initiateTransfer(1, pharmacy.address);
       await pharmaTree.connect(pharmacy).acceptTransfer(1);
     });
@@ -184,6 +208,71 @@ describe("PharmaTree Smart Contract", function () {
       await expect(
         pharmaTree.connect(pharmacy).initiateTransfer(1, distributor.address)
       ).to.be.revertedWith("Unit not active");
+    });
+  });
+
+  describe("Partial Sales (sellQuantity) & Dynamic Metadata", function () {
+    beforeEach(async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.Batch,
+        "Ibuprofen 400mg, 100 tablets",
+        100
+      );
+    });
+
+    it("Should allow the owner to sell a partial quantity and split inventory", async function () {
+      await expect(pharmaTree.connect(manufacturer).sellQuantity(1, 30))
+        .to.emit(pharmaTree, "UnitSold")
+        .withArgs(2, manufacturer.address);
+
+      const parentUnit = await pharmaTree.getUnitDetails(1);
+      const soldUnit = await pharmaTree.getUnitDetails(2);
+
+      expect(parentUnit.quantity).to.equal(70);
+      expect(parentUnit.status).to.equal(Status.Active);
+      expect(parentUnit.metadata).to.equal("Ibuprofen 400mg, 70 tablets");
+
+      expect(soldUnit.quantity).to.equal(30);
+      expect(soldUnit.status).to.equal(Status.Sold);
+      expect(soldUnit.parentId).to.equal(1);
+      expect(soldUnit.rootId).to.equal(1);
+      expect(soldUnit.metadata).to.equal("Ibuprofen 400mg, 30 tablets");
+    });
+
+    it("Should mark the entire unit as sold if selling the full available quantity", async function () {
+      await expect(pharmaTree.connect(manufacturer).sellQuantity(1, 100))
+        .to.emit(pharmaTree, "UnitSold")
+        .withArgs(1, manufacturer.address);
+
+      const unit = await pharmaTree.getUnitDetails(1);
+      expect(unit.quantity).to.equal(100);
+      expect(unit.status).to.equal(Status.Sold);
+    });
+
+    it("Should revert if selling 0 quantity", async function () {
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 0)
+      ).to.be.revertedWith("Invalid sale quantity");
+    });
+
+    it("Should revert if selling more than available quantity", async function () {
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 101)
+      ).to.be.revertedWith("Invalid sale quantity");
+    });
+
+    it("Should prevent non-owners from selling units", async function () {
+      await expect(
+        pharmaTree.connect(unauthorized).sellQuantity(1, 20)
+      ).to.be.revertedWith("Not the current owner");
+    });
+
+    it("Should prevent selling an already sold unit", async function () {
+      await pharmaTree.connect(manufacturer).sellQuantity(1, 100);
+
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 1)
+      ).to.be.revertedWith("Unit is not active");
     });
   });
 });

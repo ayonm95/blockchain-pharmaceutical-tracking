@@ -1,0 +1,422 @@
+# PharmaTree project documentation
+
+## 1. Purpose
+
+PharmaTree is a blockchain-based pharmaceutical tracking application. It
+records medicine provenance from manufacturer creation through authorized
+handler transfers and final sale.
+
+The system models a product hierarchy:
+
+```text
+Container -> Shipment -> Batch -> Box -> Individual item
+```
+
+Every unit has a numeric on-chain ID, parent/root lineage, level, manufacturer,
+current owner, pending receiver, status, quantity, and metadata.
+
+## 2. Repository structure
+
+This is a single root project. There are no separate `frontend/` or `backend/`
+directories.
+
+| Path | Responsibility |
+| --- | --- |
+| `contracts/PharmaTree.sol` | Roles, hierarchy, ownership, transfers, and sale |
+| `scripts/` | Local/Sepolia deployment and verification workflows |
+| `test/PharmaTree.test.ts` | Hardhat contract regression tests |
+| `src/app/` | Next.js routes |
+| `src/app/verify/page.tsx` | Public medicine provenance verification & QR audit trail |
+| `src/components/PharmaWalletView.tsx` | Main dashboard and wallet workflows |
+| `src/lib/pharmaTree.ts` | Frontend ABI, address, levels, and statuses |
+| `src/lib/ipfs.ts` | Medicine metadata formatting helper |
+| `public/` | Static frontend assets |
+
+## 3. Architecture
+
+### System architecture
+
+```mermaid
+flowchart LR
+    U[Manufacturer / Handler / Admin] --> MM[MetaMask]
+    MM --> UI[Next.js dashboard]
+    UI -->|Read-only JSON-RPC| RPC[Hardhat node or Sepolia]
+    UI -->|Signed transactions| RPC
+    RPC --> C[PharmaTree.sol]
+    C --> S[On-chain unit state]
+    C --> E[Transfer and sale events]
+    UI --> H[Activity and inventory views]
+    UI --> M[Metadata formatter]
+    M --> C
+```
+
+### Application layers
+
+```mermaid
+flowchart TB
+    Routes[Next.js routes] --> Wallet[PharmaWalletView]
+    Wallet --> Provider[ethers read-only provider]
+    Wallet --> Signer[MetaMask signer]
+    Wallet --> ABI[ABI and enum mappings]
+    Wallet --> Metadata[Metadata helper]
+    Provider --> Contract[PharmaTree.sol]
+    Signer --> Contract
+    Contract --> Roles[Roles]
+    Contract --> Units[Hierarchy and quantities]
+    Contract --> Events[Immutable events]
+```
+
+```text
+MetaMask
+   |
+Next.js dashboard (ethers.js)
+   | read-only JSON-RPC / signed transactions
+Hardhat local node or Sepolia
+   |
+PharmaTree.sol
+   |
+On-chain unit state and immutable events
+```
+
+The frontend uses a read-only JSON-RPC provider to load units and event
+timestamps. MetaMask supplies the signer for state-changing operations. The
+contract remains the authority for roles, ownership, quantity, and status.
+
+## 4. Smart-contract model
+
+### Roles
+
+- **Admin:** grants and removes manufacturer and handler roles.
+- **Manufacturer:** creates root medicine units and participates in transfers.
+- **Handler:** receives, transfers, accepts, and rejects assigned units.
+- **Current owner:** can initiate transfers, create child units where allowed,
+  and mark active stock as sold.
+
+The deploying account is initialized as admin and manufacturer.
+
+### Unit levels
+
+The numeric enum order used by the contract and frontend is:
+
+| Value | Level |
+| ---: | --- |
+| 0 | Container |
+| 1 | Shipment |
+| 2 | Batch |
+| 3 | Box |
+| 4 | IndividualItem |
+
+### Statuses
+
+| Value | Status | Meaning |
+| ---: | --- | --- |
+| 0 | Active | Available for normal ownership operations |
+| 1 | PendingTransfer | Transfer initiated and awaiting receiver action |
+| 2 | Sold | Finalized and no longer transferable |
+| 3 | Rejected | Pending transfer was rejected |
+
+## 5. Application workflows
+
+### End-to-end setup workflow
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant H as Hardhat
+    participant N as Local node or Sepolia
+    participant W as MetaMask
+    participant UI as Dashboard
+
+    Dev->>H: npm run compile
+    Dev->>H: npm test
+    Dev->>N: Deploy PharmaTree.sol
+    N-->>Dev: Contract address and deployment block
+    Dev->>UI: Configure .env.local
+    W->>UI: Connect wallet
+    UI->>N: Read units and events
+    UI-->>W: Render inventory and activity
+```
+
+### Medicine traceability workflow
+
+```mermaid
+flowchart TD
+    A[Deploy contract] --> B[Grant manufacturer role]
+    B --> C[Create root medicine unit]
+    C --> D{Divide quantity?}
+    D -->|Yes| E[Create partial child transfer]
+    D -->|No| F[Transfer complete unit]
+    E --> G[Receiver accepts or rejects]
+    F --> G
+    G -->|Accept| H[Receiver owns active stock]
+    G -->|Reject| I[Unit becomes rejected]
+    H --> J{Transfer onward?}
+    J -->|Yes| K[Repeat transfer handshake]
+    K --> H
+    J -->|No| L[Mark active stock sold]
+```
+
+### Partial transfer and lineage workflow
+
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant C as PharmaTree.sol
+    participant R as Receiver
+    participant UI as Dashboard
+
+    S->>UI: Enter unit, receiver, and quantity
+    UI->>UI: Validate quantity is in stock
+    UI->>C: initiatePartialTransfer(...)
+    C->>C: Reduce sender remainder
+    C->>C: Create child with parent/root lineage
+    C-->>R: Store pending receiver
+    R->>C: acceptTransfer(child)
+    C->>C: Set receiver as current owner
+    C-->>UI: Emit completion event
+    UI->>UI: Refresh inventory and lineage
+```
+
+### Transfer rejection workflow
+
+```mermaid
+flowchart LR
+    Owner[Current owner] --> Start[Initiate transfer]
+    Start --> Pending[PendingTransfer]
+    Pending --> Receiver{Pending receiver}
+    Receiver -->|Accept| Active[Active under new owner]
+    Receiver -->|Reject| Rejected[Rejected]
+    Rejected --> Review[Review and initiate a valid transfer]
+```
+
+### QR Code Verification & Public Provenance (/verify)
+
+PharmaTree provides an open verification portal enabling consumers, pharmacies, and regulators to verify authenticity without requiring Web3 wallets:
+
+```mermaid
+flowchart LR
+    Pack[Medicine Package / Batch] --> QR[Scannable QR Code]
+    QR --> Mobile[Phone camera or browser]
+    Mobile --> Page[/verify?unitId=X]
+    Page --> RPC[Sepolia JSON-RPC read]
+    RPC --> SmartContract[PharmaTree.sol]
+    SmartContract --> Audit[Authenticity Badge + Custody Timeline + Etherscan Links]
+```
+
+1. **In-Dashboard QR Generation**: Handlers and manufacturers can click **View Public QR Code** on any inventory item or modal to generate, copy, or download a printable high-resolution PNG QR label.
+2. **Public Provenance Audit**: Scanning the QR code opens `/verify?unitId=X`, displaying the authenticity status, verified manufacturer wallet, container level, and an immutable chronological custody audit trail with direct links to Sepolia Etherscan.
+3. **Manual Unit Search**: Allows manual lookups for any unit ID directly from the verification interface.
+
+### Sale workflow
+
+```mermaid
+flowchart LR
+    Stock[Active stock] --> Validate[Validate unit and quantity]
+    Validate --> Mode{Sale type}
+    Mode -->|Full stock| SellFull[markAsSold: marks entire unit as Sold]
+    Mode -->|Partial stock| SellPart[sellQuantity: splits stock, updates metadata]
+    SellFull --> Sold[Sold]
+    SellPart --> Sold
+    Sold --> Block[Future transfers blocked]
+```
+
+PharmaTree supports both full and partial quantity sales:
+1. **Partial sales (`sellQuantity`)**: The seller can sell any integer quantity $\le$ available stock. The contract creates a new child unit for the sold portion marked as `Sold`, decrements the seller's remaining inventory, and dynamically synchronizes metadata on-chain for both units (e.g. `Paracetamol, 30 tablets`).
+2. **Full sales (`markAsSold`)**: Direct sell method that marks the entire unit quantity as `Sold`.
+3. The inventory and partition views track partial sales with a dedicated `Partially sold` status badge and display exact sold/active quantity tallies.
+
+### Create medicine
+
+An authorized manufacturer or admin creates a root unit with a level, metadata,
+and positive quantity. The frontend validates wallet connection, role, name,
+and quantity before submitting the transaction.
+
+### Partial transfer
+
+The current owner can transfer all or part of an active unit's quantity to an
+authorized receiver. A partial transfer:
+
+1. Validates that the quantity is positive and in stock.
+2. Keeps the remainder on the sender's unit.
+3. Creates a child transfer unit for the quantity being sent.
+4. Records the pending receiver.
+5. Requires the receiver to accept or reject the transfer.
+
+Manufacturer views preserve lineage labels such as `1.1`. Handler inventory
+uses wallet-local numbering such as `1` and `2`, so units received from
+different senders are not incorrectly grouped together.
+
+### Transfer acceptance/rejection
+
+The receiver must be authorized and must match the pending receiver stored on
+the unit. Acceptance changes ownership and returns the unit to `Active`.
+Rejection clears the pending receiver and sets the unit to `Rejected`.
+
+### Sale
+
+The current owner can mark an active unit as sold. The contract sells the
+selected unit as a whole; the dashboard quantity field is used to verify that
+the requested amount does not exceed available stock. Sold units cannot be
+transferred again.
+
+### Role administration
+
+The admin view grants manufacturer and handler roles. The dashboard prevents
+non-admin users from granting manufacturer roles and checks receiver
+authorization before transfer submission.
+
+## 6. Frontend routes
+
+All routes render the reusable `PharmaWalletView` component with a different
+view mode:
+
+| Route | Purpose |
+| --- | --- |
+| `/` | Overview, status summaries, and recent activity |
+| `/create` | Create root medicine units |
+| `/admin` | Grant manufacturer and handler roles |
+| `/transfers` | Initiate, accept, reject, and review transfers |
+| `/inventory` | View owned stock, lineage, quantity, and status |
+
+The dashboard distinguishes manufacturer-created medicines from handler
+inventory. Manufacturer tables preserve creation and lineage context; handler
+tables focus on current stock and transfer status.
+
+## 7. Environment configuration
+
+Create local files from the committed templates:
+
+```bash
+cp .env.example .env
+cp .env.local.example .env.local
+```
+
+`.env.example` contains deployment variables such as:
+
+- `RPC_URL` and `PRIVATE_KEY` for local scripts.
+- `SEPOLIA_RPC_URL` and `SEPOLIA_PRIVATE_KEY_MANUFACTURER` for Sepolia.
+- Optional distributor/manufacturer addresses and keys.
+- `ETHERSCAN_API_KEY` for verification.
+
+`.env.local.example` contains browser configuration:
+
+```dotenv
+NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
+NEXT_PUBLIC_CHAIN_ID=31337
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xYOUR_DEPLOYED_CONTRACT_ADDRESS
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=
+NEXT_PUBLIC_PINATA_API_KEY=
+NEXT_PUBLIC_PINATA_SECRET_API_KEY=
+```
+
+Use chain ID `11155111` and the Sepolia RPC URL for Sepolia. Never commit
+`.env`, `.env.local`, private keys, API keys, or real RPC project IDs.
+
+## 8. Local development
+
+From the repository root:
+
+```bash
+npm install
+npm run compile
+npm test
+```
+
+Start the local chain:
+
+```bash
+npm run node
+```
+
+In another terminal, deploy the contract:
+
+```bash
+npx hardhat run scripts/deploy.ts --network localhost
+```
+
+Set the printed address in `.env.local`, connect MetaMask to
+`http://127.0.0.1:8545` with chain ID `31337`, import a funded Hardhat account,
+and start the dashboard:
+
+```bash
+npm run dev
+```
+
+Open <http://localhost:3000>.
+
+## 9. Sepolia deployment
+
+After filling the required values in `.env`:
+
+```bash
+npm run deploy:sepolia
+npm run deploy:fresh-manufacturer
+npm run verify:sepolia
+npm run verify:sepolia-two-wallet
+```
+
+The fresh manufacturer script deploys a new contract, assigns the manufacturer
+role, and updates the local contract address/deployment block configuration.
+Use a dedicated Sepolia test wallet with no real funds.
+
+## 10. Validation
+
+Automated checks:
+
+```bash
+npm run compile
+npm test
+npm run lint
+npm run build
+```
+
+The contract suite covers:
+
+- Admin and role authorization.
+- Root and child unit creation.
+- Partial quantity transfers.
+- Parent/child packing authorization.
+- Transfer acceptance and rejection.
+- Ownership changes.
+- Sale detachment and transfer prevention.
+
+Manual dashboard checks:
+
+1. Connect a manufacturer wallet.
+2. Create medicine and confirm it appears in Overview and Inventory.
+3. Grant a handler role.
+4. Transfer a full quantity and accept it from the handler wallet.
+5. Transfer a partial quantity and verify the sender remainder.
+6. Confirm handler inventory uses separate local unit numbers.
+7. Try an unauthorized receiver and an over-quantity transfer.
+8. Sell active stock and confirm it cannot be transferred afterward.
+
+## 11. Known limitations
+
+- `src/lib/ipfs.ts` formats metadata locally; production pinning requires
+  configuring a secure server-side Pinata/IPFS integration.
+- Unit reads currently iterate through the contract's unit counter. A subgraph,
+  indexed API, or pagination strategy would scale better for large deployments.
+- Contract addresses and network settings are supplied through environment
+  variables and must match the connected MetaMask network.
+- The current contract sale operation is whole-unit sale rather than a
+  partial-sale transaction.
+
+## 12. Security and public release
+
+- Keep all secrets in ignored local environment files.
+- Use placeholder values in committed templates.
+- Do not expose private keys in scripts, screenshots, logs, issues, or commits.
+- Use a dedicated test wallet for local and Sepolia automation.
+- Rotate any credential that may have been exposed.
+
+## 13. Author and project links
+
+**Ayon Moitra**
+
+- GitHub: [@ayonm95](https://github.com/ayonm95)
+- Repository: [blockchain-pharmaceutical-tracking](https://github.com/ayonm95/blockchain-pharmaceutical-tracking)
+- Issues: [GitHub Issues](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/issues)
+- LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra-80b583320/)
+
+This project is distributed under the [MIT License](./LICENSE).
