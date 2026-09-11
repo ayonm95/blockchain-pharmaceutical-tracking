@@ -417,6 +417,6 @@ Manual dashboard checks:
 - GitHub: [@ayonm95](https://github.com/ayonm95)
 - Repository: [blockchain-pharmaceutical-tracking](https://github.com/ayonm95/blockchain-pharmaceutical-tracking)
 - Issues: [GitHub Issues](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/issues)
-- LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra-80b583320/)
+- LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra/)
 
 This project is distributed under the [MIT License](./LICENSE).
